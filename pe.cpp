@@ -46,6 +46,8 @@ uint64 GetVA(byte* offset, byte* baseOffset, uint64 rvBaseOffset) {
 // 3. reloc table
 // 4. subsystem
 void Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_values, int32 roCount, String kernel, LPCWSTR filename) {
+
+	// TODO: obviously don't alloate fixed size
 	byte* base = (byte*)OSAllocate(0x800);
 	byte* buffer;
 
@@ -143,9 +145,23 @@ void Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_valu
 	// fill in address of entry point
 	headers->OptionalHeader.AddressOfEntryPoint = (DWORD)ops[entryOpIndex].address;
 
-	// TODO: replace with something better
-	// this is all terrible and I hate this
-	Arena arena = CreateArena(1024);
+//----------------------------------------------------------------------------------------
+
+	/*
+	 * TODO: replace with something better
+	 *       this is all terrible and I hate this
+	 */
+
+#define sizeofitem(array)					sizeof(*(array)->table)
+
+#define ARRAY_RESERVE(array, new_capacity)	do{if ((array)->table == NULL || (array)->capacity<(new_capacity)){ \
+											(array)->data = ArenaReAlloc((array)->arena, (array)->table, (array)->capacity*sizeofitem(array), (new_capacity)*sizeofitem(array)); \
+											(array)->capacity = (new_capacity);}}while(0)
+
+#define ARRAY_ADD(array, item)				do{if ((array)->capacity == (array)->count) {ARRAY_RESERVE(array, ((array)->count ? (array)->count * 2 : 4));} \
+											(array)->table[(array)->count] = item; (array)->count++;}while(0)
+
+	Arena arena = CreateArena();
 	uint64* mem_addresses = (uint64*)OSAllocate(roCount * 8);
 	SymbolArray importedArr = {&arena}; // TODO: one for each library
 	for (int32 i = 0; i < opCount; i++) {
@@ -176,6 +192,8 @@ void Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_valu
 			ARRAY_ADD(calls, op->offset);
 		}
 	}
+
+//----------------------------------------------------------------------------------------
 
 	// emit jumps for each imported call and fill in relative calls
 	for (int16 i = 0; i < importedArr.count; i++) {
@@ -285,4 +303,7 @@ void Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_valu
 	File file = OSCreateFile(filename);
 	OSWriteFile(file, base, 0x400 + codeSize);
 	OSCloseFile(file);
+
+	DestroyArena(&arena);
+	OSFree(base, 0x800);
 }
