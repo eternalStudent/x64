@@ -1024,6 +1024,7 @@ enum OpCode : int32 {
 	Op_Comiss   = 0x70F,
 
 	Op_Movss,
+	Op_Roundss,
 	Op_Cvttss2si,
 	Op_Cvtsi2ss,
 };
