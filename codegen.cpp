@@ -426,11 +426,11 @@ void Emit(byte** ptr, byte op, Register dst, Register src) {
 	EmitModRegRM(ptr, 3, reg2, reg1);
 }
 
-// TODO: at least 32bit? used for imul 
+// TODO: at least 32bit?
 void Emit16(byte** ptr, uint16 op, Register dst, Register src) {
 	byte size = dst >> 4;
-	byte reg1 = dst & 0x0F;
-	byte reg2 = src & 0x0F;
+	byte reg2 = dst & 0x0F;
+	byte reg1 = src & 0x0F;
 
 	if (size == SIZE_16BIT) {
 		Emit(ptr, 0x66);
@@ -948,6 +948,8 @@ enum OpCode : int32 {
 	Op_Lea,
 	Op_Pop,
 	Op_Test,
+	Op_Movzx,
+	Op_Movsx,
 
 	Op_Inc      = 0x100,
 	Op_Dec      = 0x101,
@@ -1260,10 +1262,6 @@ void Emit(byte** ptr, OpCode opCode, Register dst, Register src) {
 		byte op = (byte)(opCode & 7);
 		Emit(ptr, 0xD2, op, dst);
 	} break;
-	case Op_Imul: {
-		ASSERT(SIZE_32BIT <= (dst >> 4)); 
-		Emit16(ptr, 0xAF0E, dst, src);
-	} break;
 	case Op_Cmovo :
 	case Op_Cmovno:
 	case Op_Cmovb :
@@ -1287,11 +1285,44 @@ void Emit(byte** ptr, OpCode opCode, Register dst, Register src) {
 	case Op_Cmovle:
 	case Op_Cmovng:
 	case Op_Cmovg : {
-		ASSERT(SIZE_16BIT <= (src >> 4)); 
 		ASSERT(SIZE_16BIT <= (dst >> 4)); 
+		ASSERT(SIZE_16BIT <= (src >> 4));
+		ASSERT((dst >> 4) == (src >> 4));
 		byte cc = ((byte)(opCode & 0x1E) >> 1);
 		uint16 op = 0x400E | (cc << 8);
 		Emit16(ptr, op, dst, src);
+	} break;
+	case Op_Imul: {
+		ASSERT(SIZE_32BIT <= (dst >> 4)); 
+		ASSERT(SIZE_32BIT <= (src >> 4));
+		ASSERT((dst >> 4) == (src >> 4));
+		Emit16(ptr, 0xAF0E, dst, src);
+	} break;
+	case Op_Movzx: {
+		if ((src >> 4) == SIZE_8BIT) {
+			ASSERT(SIZE_16BIT <= (dst >> 4)); 
+			Emit16(ptr, 0xB60E, dst, src);
+		}
+		else if ((src >> 4) == SIZE_16BIT) {
+			ASSERT(SIZE_32BIT <= (dst >> 4)); 
+			Emit16(ptr, 0xB70E, dst, src);
+		}
+		else {
+			ASSERT(0);
+		}
+	} break;
+	case Op_Movsx: {
+		if ((src >> 4) == SIZE_8BIT) {
+			ASSERT(SIZE_16BIT <= (dst >> 4)); 
+			Emit16(ptr, 0xBE0E, dst, src);
+		}
+		else if ((src >> 4) == SIZE_16BIT) {
+			ASSERT(SIZE_32BIT <= (dst >> 4)); 
+			Emit16(ptr, 0xBF0E, dst, src);
+		}
+		else {
+			ASSERT(0);
+		}
 	} break;
 	default: {
 		ASSERT(0);
@@ -1392,8 +1423,51 @@ void Emit(byte** ptr, OpCode opCode, Register reg, Memory mem) {
 		uint16 op = 0x400E | (cc << 8);
 		Emit16(ptr, op, reg, mem);
 	} break;
+	case Op_Movzx: {
+		ASSERT((reg >> 4) == SIZE_16BIT);
+		Emit16(ptr, 0xB60E, reg, mem);
+	} break;
+	case Op_Movsx: {
+		ASSERT((reg >> 4) == SIZE_16BIT);
+		Emit16(ptr, 0xBE0E, reg, mem);
+	} break;
 	default: {
 		ASSERT(0);
+	} break;
+	}
+}
+
+void Emit(byte** ptr, OpCode opCode, Register reg, byte size, Memory mem) {
+	switch (opCode) {
+	
+	case Op_Movzx: {
+		if (size == SIZE_8BIT) {
+			ASSERT((reg >> 4) >= SIZE_16BIT);
+			Emit16(ptr, 0xB60E, reg, mem);
+		}
+		else if (size == SIZE_16BIT) {
+			ASSERT((reg >> 4) >= SIZE_32BIT);
+			Emit16(ptr, 0xB70E, reg, mem);
+		}
+		else {
+			ASSERT(0);
+		}
+	} break;
+	case Op_Movsx: {
+		if (size == SIZE_8BIT) {
+			ASSERT((reg >> 4) >= SIZE_16BIT);
+			Emit16(ptr, 0xBE0E, reg, mem);
+		}
+		else if (size == SIZE_16BIT) {
+			ASSERT((reg >> 4) >= SIZE_32BIT);
+			Emit16(ptr, 0xBF0E, reg, mem);
+		}
+		else {
+			ASSERT(0);
+		}
+	} break;
+	default: {
+		Emit(ptr, opCode, reg, mem);
 	} break;
 	}
 }
@@ -1572,7 +1646,8 @@ void EmitOperation(byte** ptr, Operation* op) {
 				Emit(ptr, op->opCode, dst.reg, src.reg);
 			}
 			else if (src.type == Od_Memory) {
-				Emit(ptr, op->opCode, dst.reg, src.mem);
+				// NOTE: size is usually ignored, but used for move with extension
+				Emit(ptr, op->opCode, dst.reg, op->size, src.mem);
 			}
 			else if (src.type == Od_Xmm) {
 				Emit(ptr, op->opCode, dst.reg, src.xmm);
