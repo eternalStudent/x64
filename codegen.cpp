@@ -477,6 +477,34 @@ void Emit(byte** ptr, byte op, Register _register, Memory mem) {
 	EmitDisplacement(ptr, mem);
 }
 
+void Emit16(byte** ptr, uint16 op, Register _register, Memory mem) {
+	byte size = (_register & 0xF0) >> 4;
+	byte reg = _register & 0x0F;
+
+	if (mem.regSize == SIZE_32BIT) {
+		Emit(ptr, 0x67);
+	}
+
+	if (size == SIZE_16BIT) {
+		Emit(ptr, 0x66);
+	}
+
+	if (size == SIZE_64BIT || reg > 7 || mem.base > 7 || mem.index > 7) {
+		byte w = size == SIZE_64BIT ? 1 : 0;
+		byte b = (mem.base & 8) >> 3;
+		EmitRexPrefix(ptr, w, reg, mem.index, b);
+	}
+
+	if (size == SIZE_8BIT)
+		Emit16(ptr, op);
+	else
+		Emit16(ptr, op + 1);
+
+	EmitModRegRM(ptr, reg, mem);
+	EmitSIB(ptr, mem);
+	EmitDisplacement(ptr, mem);
+}
+
 void Emit(byte** ptr, byte op, byte size, Memory mem, Immediate imm) {
 	if (mem.regSize == SIZE_32BIT) {
 		Emit(ptr, 0x67);
@@ -748,33 +776,6 @@ void EmitPop(byte** ptr, Register _register) {
 	Emit(ptr, 0x58 | (reg & 7));
 }
 
-// Conditional Jump
-//------------------
-
-#define JO   0x0
-#define JNO  0x1
-#define JB   0x2
-#define JC   0x2
-#define JAE  0x3
-#define JNC  0x3
-#define JE   0x4
-#define JZ   0x4
-#define JNE  0x5
-#define JNZ  0x5
-#define JBE  0x6
-#define JNA  0x6
-#define JA   0x7
-#define JS   0x8
-#define JNS  0x9
-#define JPE  0xA
-#define JPO  0xB
-#define JL   0xC
-#define JGE  0xD
-#define JNL  0xD
-#define JLE  0xE
-#define JNG  0xE
-#define JG   0xF
-
 //-------------
 
 enum XMM : byte {
@@ -1023,6 +1024,30 @@ enum OpCode : int32 {
 	Op_Ucomiss  = 0x70E,
 	Op_Comiss   = 0x70F,
 
+	Op_Cmovo       = 0x800,
+	Op_Cmovno      = 0x800 | (1 << 1),
+	Op_Cmovb       = 0x800 | (2 << 1),
+	Op_Cmovc,
+	Op_Cmovae      = 0x800 | (3 << 1),
+	Op_Cmovnc,
+	Op_Cmove       = 0x800 | (4 << 1),
+	Op_Cmovz,
+	Op_Cmovne      = 0x800 | (5 << 1),
+	Op_Cmovnz,
+	Op_Cmovbe      = 0x800 | (6 << 1),
+	Op_Cmovna,
+	Op_Cmova       = 0x800 | (7 << 1),
+	Op_Cmovs       = 0x800 | (8 << 1),
+	Op_Cmovns      = 0x800 | (9 << 1),
+	Op_Cmovpe      = 0x800 | (10 << 1),
+	Op_Cmovpo      = 0x800 | (11 << 1),
+	Op_Cmovl       = 0x800 | (12 << 1),
+	Op_Cmovge      = 0x800 | (13 << 1),
+	Op_Cmovnl,
+	Op_Cmovle      = 0x800 | (14 << 1),
+	Op_Cmovng,
+	Op_Cmovg       = 0x800 | (15 << 1),
+
 	Op_Movss,
 	Op_Roundss,
 	Op_Cvttss2si,
@@ -1206,7 +1231,7 @@ void Emit(byte** ptr, OpCode opCode, Register reg, Immediate imm) {
 
 void Emit(byte** ptr, OpCode opCode, Register dst, Register src) {
 	switch (opCode) {
-	case Op_Mov:	{
+	case Op_Mov: {
 		Emit(ptr, 0x88, dst, src);
 	} break;
 	case Op_Add:
@@ -1238,6 +1263,35 @@ void Emit(byte** ptr, OpCode opCode, Register dst, Register src) {
 	case Op_Imul: {
 		ASSERT(SIZE_32BIT <= (dst >> 4)); 
 		Emit16(ptr, 0xAF0E, dst, src);
+	} break;
+	case Op_Cmovo :
+	case Op_Cmovno:
+	case Op_Cmovb :
+	case Op_Cmovc :
+	case Op_Cmovae:
+	case Op_Cmovnc:
+	case Op_Cmove :
+	case Op_Cmovz :
+	case Op_Cmovne:
+	case Op_Cmovnz:
+	case Op_Cmovbe:
+	case Op_Cmovna:
+	case Op_Cmova :
+	case Op_Cmovs :
+	case Op_Cmovns:
+	case Op_Cmovpe:
+	case Op_Cmovpo:
+	case Op_Cmovl :
+	case Op_Cmovge:
+	case Op_Cmovnl:
+	case Op_Cmovle:
+	case Op_Cmovng:
+	case Op_Cmovg : {
+		ASSERT(SIZE_16BIT <= (src >> 4)); 
+		ASSERT(SIZE_16BIT <= (dst >> 4)); 
+		byte cc = ((byte)(opCode & 0x1E) >> 1);
+		uint16 op = 0x400E | (cc << 8);
+		Emit16(ptr, op, dst, src);
 	} break;
 	default: {
 		ASSERT(0);
@@ -1309,6 +1363,34 @@ void Emit(byte** ptr, OpCode opCode, Register reg, Memory mem) {
 	} break;
 	case Op_Test:{
 		Emit(ptr, 0x84, reg, mem);
+	} break;
+	case Op_Cmovo :
+	case Op_Cmovno:
+	case Op_Cmovb :
+	case Op_Cmovc :
+	case Op_Cmovae:
+	case Op_Cmovnc:
+	case Op_Cmove :
+	case Op_Cmovz :
+	case Op_Cmovne:
+	case Op_Cmovnz:
+	case Op_Cmovbe:
+	case Op_Cmovna:
+	case Op_Cmova :
+	case Op_Cmovs :
+	case Op_Cmovns:
+	case Op_Cmovpe:
+	case Op_Cmovpo:
+	case Op_Cmovl :
+	case Op_Cmovge:
+	case Op_Cmovnl:
+	case Op_Cmovle:
+	case Op_Cmovng:
+	case Op_Cmovg : {
+		ASSERT(SIZE_16BIT <= (reg >> 4));  
+		byte cc = ((byte)(opCode & 0x1E) >> 1);
+		uint16 op = 0x400E | (cc << 8);
+		Emit16(ptr, op, reg, mem);
 	} break;
 	default: {
 		ASSERT(0);
