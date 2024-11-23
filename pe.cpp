@@ -45,9 +45,11 @@ uint64 GetVA(byte* offset, byte* baseOffset, uint64 rvBaseOffset) {
 // 2. dynamic size
 // 3. reloc table
 // 4. subsystem
-void Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_values, int32 roCount, String kernel, LPCWSTR filename) {
+bool Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_values, int32 roCount, String kernel, LPCWSTR filename) {
 
+	bool success = true;
 	// TODO: obviously don't alloate fixed size
+	//       use BigBuffer
 	byte* base = (byte*)OSAllocate(0x800);
 	byte* buffer;
 
@@ -125,12 +127,16 @@ void Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_valu
 // Start of Code
 //---------------
 	buffer = base + 0x200;
+	SymbolArray importedArr; // TODO: one for each library
 
 	// emit instructions
 	for (int32 i = 0; i < opCount; i++) {
 		Operation* op = ops + i;
 		op->address = (int32)GetRVA(buffer, base + 0x200, 0x1000);
-		EmitOperation(&buffer, op);
+		if (!EmitOperation(&buffer, op)) {
+			success = false;
+			goto clean;
+		}
 	}
 
 	// fill in relative local jumps
@@ -162,8 +168,8 @@ void Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_valu
 											(array)->table[(array)->count] = item; (array)->count++;}while(0)
 
 	Arena arena = CreateArena();
+	importedArr = {&arena};
 	uint64* mem_addresses = (uint64*)OSAllocate(roCount * 8);
-	SymbolArray importedArr = {&arena}; // TODO: one for each library
 	for (int32 i = 0; i < opCount; i++) {
 		Operation* op = ops+i;
 		if (op->operands[0].type == Od_ImportedFunction) {
@@ -301,9 +307,17 @@ void Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_valu
 //-----------------------
 
 	File file = OSCreateFile(filename);
+	if (file == FILE_ERROR) {
+		success = false;
+		goto clean;
+	}
+
 	OSWriteFile(file, base, 0x400 + codeSize);
 	OSCloseFile(file);
 
+clean:
 	DestroyArena(&arena);
 	OSFree(base, 0x800);
+
+	return success;
 }
