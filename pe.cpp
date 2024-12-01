@@ -48,23 +48,20 @@ uint64 GetVA(byte* offset, byte* baseOffset, uint64 rvBaseOffset) {
 bool Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_values, int32 roCount, String kernel, LPCWSTR filename) {
 
 	bool success = true;
-	// TODO: obviously don't alloate fixed size
-	//       use BigBuffer
-	byte* base = (byte*)OSAllocate(0x800);
-	byte* buffer;
+	BigBuffer buffer = CreateBigBuffer(KB(2));
+	byte* base = buffer.start;
 
 // Headers
 //----------
-	buffer = base;
 
 	// DOS Header
-	IMAGE_DOS_HEADER* DOSHeader = (IMAGE_DOS_HEADER*)buffer;
+	IMAGE_DOS_HEADER* DOSHeader = (IMAGE_DOS_HEADER*)buffer.pos;
 	DOSHeader->e_magic = IMAGE_DOS_SIGNATURE;
 	DOSHeader->e_lfanew = sizeof(IMAGE_DOS_HEADER);
-	buffer += sizeof(IMAGE_DOS_HEADER);
+	buffer.pos += sizeof(IMAGE_DOS_HEADER);
 
 	// Image NT Header
-	IMAGE_NT_HEADERS* headers = (IMAGE_NT_HEADERS*)buffer;
+	IMAGE_NT_HEADERS* headers = (IMAGE_NT_HEADERS*)buffer.pos;
 	headers->Signature = IMAGE_NT_SIGNATURE;
 	headers->FileHeader.Machine = IMAGE_FILE_MACHINE_AMD64;
 	headers->FileHeader.NumberOfSections = 2;
@@ -96,10 +93,10 @@ bool Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_valu
 	headers->OptionalHeader.SizeOfHeapReserve = 0x100000;
 	headers->OptionalHeader.SizeOfHeapCommit = 0x1000;
 	headers->OptionalHeader.NumberOfRvaAndSizes = 2;
-	buffer += sizeof(IMAGE_NT_HEADERS);
+	buffer.pos += sizeof(IMAGE_NT_HEADERS);
 
 	// Image Section Headers
-	IMAGE_SECTION_HEADER* codeSection = (IMAGE_SECTION_HEADER*)buffer;
+	IMAGE_SECTION_HEADER* codeSection = (IMAGE_SECTION_HEADER*)buffer.pos;
 	codeSection->Name[0] = '.';
 	codeSection->Name[1] = 't';
 	codeSection->Name[2] = 'e';
@@ -107,10 +104,13 @@ bool Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_valu
 	codeSection->Name[4] = 't';
 	codeSection->VirtualAddress = 0x1000;
 	codeSection->PointerToRawData = 0x200;
-	codeSection->Characteristics = 0x60000020;
-	buffer += sizeof(IMAGE_SECTION_HEADER);
+	codeSection->Characteristics =     // 0x60000020
+		IMAGE_SCN_MEM_READ |           // 0x40000000
+		IMAGE_SCN_MEM_EXECUTE |        // 0x20000000
+		IMAGE_SCN_CNT_CODE;            // 0x00000020
+	buffer.pos += sizeof(IMAGE_SECTION_HEADER);
 
-	IMAGE_SECTION_HEADER* dataSection = (IMAGE_SECTION_HEADER*)buffer;
+	IMAGE_SECTION_HEADER* dataSection = (IMAGE_SECTION_HEADER*)buffer.pos;
 	dataSection->Name[0] = '.';
 	dataSection->Name[1] = 'r';
 	dataSection->Name[2] = 'd';
@@ -119,21 +119,23 @@ bool Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_valu
 	dataSection->Name[5] = 'a';
 	dataSection->VirtualAddress = 0x2000;
 	dataSection->SizeOfRawData = 0x200;
-	dataSection->Characteristics = 0x40000040;
+	dataSection->Characteristics =      // 0x40000040
+		IMAGE_SCN_MEM_READ |            // 0x40000000
+		IMAGE_SCN_CNT_INITIALIZED_DATA; // 0x00000040;
 
 // End of Headers
 //----------------
 
 // Start of Code
 //---------------
-	buffer = base + 0x200;
+	buffer.pos = base + 0x200;
 	SymbolArray importedArr; // TODO: one for each library
 
 	// emit instructions
 	for (int32 i = 0; i < opCount; i++) {
 		Operation* op = ops + i;
-		op->address = (int32)GetRVA(buffer, base + 0x200, 0x1000);
-		if (!EmitOperation(&buffer, op)) {
+		op->address = (int32)GetRVA(buffer.pos, base + 0x200, 0x1000);
+		if (!EmitOperation(&buffer.pos, op)) {
 			success = false;
 			goto clean;
 		}
@@ -169,7 +171,6 @@ bool Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_valu
 
 	Arena arena = CreateArena();
 	importedArr = {&arena};
-	uint64* mem_addresses = (uint64*)OSAllocate(roCount * 8);
 	for (int32 i = 0; i < opCount; i++) {
 		Operation* op = ops+i;
 		if (op->operands[0].type == Od_ImportedFunction) {
@@ -206,13 +207,13 @@ bool Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_valu
 		DllSymbol* imported = importedArr.table + i;
 		for (int32 j = 0; j < imported->calls.count; j++) {
 			int32* ref = imported->calls.table[j];
-			*ref = (int32)(buffer - (byte*)ref - 4);
+			*ref = (int32)(buffer.pos - (byte*)ref - 4);
 		}
-		imported->jump = EmitIndirectJmp(&buffer);
+		imported->jump = EmitIndirectJmp(&buffer.pos);
 	}
 
 	// end of code, fill in virtual size of code section...
-	int32 virtualSize = (int32)(buffer - (base + 0x200));
+	int32 virtualSize = (int32)(buffer.pos - (base + 0x200));
 	codeSection->Misc.VirtualSize = virtualSize;
 	// .. and code size
 	int32 codeSize = ((virtualSize / 0x200) + 1)*0x200;
@@ -226,28 +227,29 @@ bool Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_valu
 //-------------------------
 	int32 dataSectionOffset = 0x200 + codeSize;
 	dataSection->PointerToRawData = dataSectionOffset;
-	buffer = base + dataSectionOffset;
+	buffer.pos = base + dataSectionOffset;
 
 	// IAT Directory
 	headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IAT].VirtualAddress 
-		= (DWORD)GetRVA(buffer, base + dataSectionOffset, 0x2000);
+		= (DWORD)GetRVA(buffer.pos, base + dataSectionOffset, 0x2000);
 	for (int16 i = 0; i < importedArr.count; i++) {
 		DllSymbol* import = importedArr.table + i;
-		import->iat = (uint64*)buffer;
-		*import->jump = (int32)(GetRVA(buffer, base + dataSectionOffset, 0x2000) - (GetRVA((byte*)import->jump, base + 0x200, 0x1000) + 4));
-		buffer += 8;
+		import->iat = (uint64*)buffer.pos;
+		*import->jump = (int32)(GetRVA(buffer.pos, base + dataSectionOffset, 0x2000) - (GetRVA((byte*)import->jump, base + 0x200, 0x1000) + 4));
+		buffer.pos += 8;
 	}
-	Emit64(&buffer, 0);
+	Emit64(&buffer.pos, 0);
 
 	// end of IAT, fill in IAT size
 	headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IAT].Size 
 		= (importedArr.count + 1)*8;
 
 	// emit read-only data, fill in absolute-address refrences
+	uint64* mem_addresses = (uint64*)OSAllocate(roCount * 8);
 	for (int32 i = 0; i < roCount; i++) {
-		uint64 va = GetVA(buffer, base + dataSectionOffset, 0x2000);
+		uint64 va = GetVA(buffer.pos, base + dataSectionOffset, 0x2000);
 		mem_addresses[i] = va;
-		EmitString(&buffer, rodata_values[i]);
+		EmitString(&buffer.pos, rodata_values[i]);
 	}
 
 	for (int32 i = 0; i < opCount; i++) {
@@ -262,9 +264,9 @@ bool Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_valu
 	}
 
 	// Image Import Descriptor
-	IMAGE_IMPORT_DESCRIPTOR* import_desc = (IMAGE_IMPORT_DESCRIPTOR*)buffer;
+	IMAGE_IMPORT_DESCRIPTOR* import_desc = (IMAGE_IMPORT_DESCRIPTOR*)buffer.pos;
 	import_desc->FirstThunk = headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IAT].VirtualAddress;
-	buffer += 2*sizeof(IMAGE_IMPORT_DESCRIPTOR);
+	buffer.pos += 2*sizeof(IMAGE_IMPORT_DESCRIPTOR);
 
 	// Import Directory
 	headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress 
@@ -273,35 +275,35 @@ bool Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_valu
 		= 2*sizeof(IMAGE_IMPORT_DESCRIPTOR);
 
 	// fill in import descriptor first thunk
-	import_desc->OriginalFirstThunk = (DWORD)GetRVA(buffer, base + dataSectionOffset, 0x2000);
+	import_desc->OriginalFirstThunk = (DWORD)GetRVA(buffer.pos, base + dataSectionOffset, 0x2000);
 
 	// skip and store offsets of ilt to be filled in
 	for (int16 i = 0; i < importedArr.count; i++) {
 		DllSymbol* import = importedArr.table + i;
-		import->ilt = (uint64*)buffer;
-		buffer += 8;
+		import->ilt = (uint64*)buffer.pos;
+		buffer.pos += 8;
 	}
-	Emit64(&buffer, 0);
+	Emit64(&buffer.pos, 0);
 
 	// emit names and hints of imported function, fill in both ilt and iat with the relative address
 	for (int16 i = 0; i < importedArr.count; i++) {
 		DllSymbol* import = importedArr.table + i;
-		*import->ilt = GetRVA(buffer, base + dataSectionOffset, 0x2000);
+		*import->ilt = GetRVA(buffer.pos, base + dataSectionOffset, 0x2000);
 		*import->iat = *import->ilt;
-		Emit16(&buffer, import->hint);
-		EmitString(&buffer, import->name);
-		Emit(&buffer, 0);
-		if (import->name.length % 2) Emit(&buffer, 0);
+		Emit16(&buffer.pos, import->hint);
+		EmitString(&buffer.pos, import->name);
+		Emit(&buffer.pos, 0);
+		if (import->name.length % 2) Emit(&buffer.pos, 0);
 	}
 
 	// fill in relative address to library name
-	import_desc->Name = (DWORD)GetRVA(buffer, base + dataSectionOffset, 0x2000);
-	EmitString(&buffer, kernel);
-	Emit(&buffer, 0);
-	Emit(&buffer, 0);
+	import_desc->Name = (DWORD)GetRVA(buffer.pos, base + dataSectionOffset, 0x2000);
+	EmitString(&buffer.pos, kernel);
+	Emit(&buffer.pos, 0);
+	Emit(&buffer.pos, 0);
 
 	// fill in size of read-only data section
-	dataSection->Misc.VirtualSize = (int32)(buffer - (base + dataSectionOffset));
+	dataSection->Misc.VirtualSize = (int32)(buffer.pos - (base + dataSectionOffset));
 
 // End of Read-Only Data
 //-----------------------
@@ -317,7 +319,7 @@ bool Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_valu
 
 clean:
 	DestroyArena(&arena);
-	OSFree(base, 0x800);
+	DestroyBigBuffer(&buffer);
 
 	return success;
 }
