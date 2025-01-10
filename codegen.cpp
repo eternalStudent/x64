@@ -572,7 +572,7 @@ void Emit(byte** ptr, byte op, Memory mem, Register _register) {
 
 void Emit(byte** ptr, byte op, Register register1, Register register2, Immediate imm) {
 	byte imm_size = GetSignedSize(imm);
-	Emit(ptr, op, register1, register2);
+	Emit(ptr, op, register2, register1);
 
 	if (imm_size == SIZE_8BIT) {
 		Emit(ptr, (byte)imm.u);
