@@ -51,6 +51,14 @@ bool Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_valu
 	BigBuffer buffer = CreateBigBuffer(KB(2));
 	byte* base = buffer.start;
 
+// define variables on the stack so I can jump over them.
+	File file;
+	IMAGE_IMPORT_DESCRIPTOR* import_desc;
+	uint64* mem_addresses;
+	int32 dataSectionOffse, codeSize, virtualSize, dataSectionOffset;
+	Arena arena;
+
+
 // Headers
 //----------
 
@@ -169,7 +177,7 @@ bool Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_valu
 #define ARRAY_ADD(array, item)				do{if ((array)->capacity == (array)->count) {ARRAY_RESERVE(array, ((array)->count ? (array)->count * 2 : 4));} \
 											(array)->table[(array)->count] = item; (array)->count++;}while(0)
 
-	Arena arena = CreateArena();
+	arena = CreateArena();
 	importedArr = {&arena};
 	for (int32 i = 0; i < opCount; i++) {
 		Operation* op = ops+i;
@@ -213,10 +221,10 @@ bool Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_valu
 	}
 
 	// end of code, fill in virtual size of code section...
-	int32 virtualSize = (int32)(buffer.pos - (base + 0x200));
+	virtualSize = (int32)(buffer.pos - (base + 0x200));
 	codeSection->Misc.VirtualSize = virtualSize;
 	// .. and code size
-	int32 codeSize = ((virtualSize / 0x200) + 1)*0x200;
+	codeSize = ((virtualSize / 0x200) + 1)*0x200;
 	codeSection->SizeOfRawData = codeSize;
 	headers->OptionalHeader.SizeOfCode = codeSize;
 
@@ -225,7 +233,7 @@ bool Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_valu
 
 // Start of Read-Only Data
 //-------------------------
-	int32 dataSectionOffset = 0x200 + codeSize;
+	dataSectionOffset = 0x200 + codeSize;
 	dataSection->PointerToRawData = dataSectionOffset;
 	buffer.pos = base + dataSectionOffset;
 
@@ -245,7 +253,7 @@ bool Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_valu
 		= (importedArr.count + 1)*8;
 
 	// emit read-only data, fill in absolute-address refrences
-	uint64* mem_addresses = (uint64*)OSAllocate(roCount * 8);
+	mem_addresses = (uint64*)OSAllocate(roCount * 8);
 	for (int32 i = 0; i < roCount; i++) {
 		uint64 va = GetVA(buffer.pos, base + dataSectionOffset, 0x2000);
 		mem_addresses[i] = va;
@@ -264,7 +272,7 @@ bool Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_valu
 	}
 
 	// Image Import Descriptor
-	IMAGE_IMPORT_DESCRIPTOR* import_desc = (IMAGE_IMPORT_DESCRIPTOR*)buffer.pos;
+	import_desc = (IMAGE_IMPORT_DESCRIPTOR*)buffer.pos;
 	import_desc->FirstThunk = headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IAT].VirtualAddress;
 	buffer.pos += 2*sizeof(IMAGE_IMPORT_DESCRIPTOR);
 
@@ -308,7 +316,7 @@ bool Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_valu
 // End of Read-Only Data
 //-----------------------
 
-	File file = OSCreateFile(filename);
+	file = OSCreateFile(filename);
 	if (file == FILE_ERROR) {
 		success = false;
 		goto clean;
