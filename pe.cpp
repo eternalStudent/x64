@@ -55,7 +55,7 @@ bool Link(Operation* ops, int32 opCount, int32 entryOpIndex, String* rodata_valu
 	File file;
 	IMAGE_IMPORT_DESCRIPTOR* import_desc;
 	uint64* mem_addresses;
-	int32 dataSectionOffse, codeSize, virtualSize, dataSectionOffset;
+	int32 dataSectionOffset, codeSize, virtualSize;
 	Arena arena;
 
 
