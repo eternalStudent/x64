@@ -426,8 +426,7 @@ void Emit(byte** ptr, byte op, Register dst, Register src) {
 	EmitModRegRM(ptr, 3, reg2, reg1);
 }
 
-// TODO: at least 32bit?
-void Emit16(byte** ptr, uint16 op, Register dst, Register src) {
+void Emit(byte** ptr, byte op1, byte op2, Register dst, Register src) {
 	byte size = dst >> 4;
 	byte reg2 = dst & 0x0F;
 	byte reg1 = src & 0x0F;
@@ -442,10 +441,29 @@ void Emit16(byte** ptr, uint16 op, Register dst, Register src) {
 		EmitRexPrefix(ptr, w, reg2, 0, b);
 	}
 
-	if (size == SIZE_8BIT)
-		Emit16(ptr, op);
-	else
-		Emit16(ptr, op+1);
+	Emit(ptr, op1);
+	Emit(ptr, op2);
+	EmitModRegRM(ptr, 3, reg2, reg1);
+}
+
+void Emit(byte** ptr, byte op1, byte op2, byte op3, Register dst, Register src) {
+	byte size = dst >> 4;
+	byte reg2 = dst & 0x0F;
+	byte reg1 = src & 0x0F;
+
+	if (size == SIZE_16BIT) {
+		Emit(ptr, 0x66);
+	}
+
+	if (size == SIZE_64BIT || reg1 > 7 || reg2 > 7) {
+		byte w = size == SIZE_64BIT ? 1 : 0;
+		byte b = (reg1 & 8) >> 3;
+		EmitRexPrefix(ptr, w, reg2, 0, b);
+	}
+
+	Emit(ptr, op1);
+	Emit(ptr, op2);
+	Emit(ptr, op3);
 	EmitModRegRM(ptr, 3, reg2, reg1);
 }
 
@@ -949,8 +967,16 @@ enum OpCode : int32 {
 	Op_Lea,
 	Op_Pop,
 	Op_Test,
+
+	Op_Cmpxchg,
+	Op_Btr,
 	Op_Movzx,
+	Op_Popcnt,
+	Op_Btc,
+	Op_Bsf,
+	Op_Bsr,
 	Op_Movsx,
+	Op_Xadd,
 
 	Op_Inc      = 0x100,
 	Op_Dec      = 0x101,
@@ -1242,10 +1268,10 @@ bool Emit(byte** ptr, OpCode opCode, Register reg, Immediate imm) {
 }
 
 bool Emit(byte** ptr, OpCode opCode, Register dst, Register src) {
+	byte dstSize = dst >> 4;
+	byte srcSize = src >> 4;
+
 	switch (opCode) {
-	case Op_Mov: {
-		Emit(ptr, 0x88, dst, src);
-	} break;
 	case Op_Add:
 	case Op_Or :
 	case Op_Adc:
@@ -1260,6 +1286,9 @@ bool Emit(byte** ptr, OpCode opCode, Register dst, Register src) {
 	} break;
 	case Op_Test: {
 		Emit(ptr, 0x84, dst, src);
+	} break;
+	case Op_Mov: {
+		Emit(ptr, 0x88, dst, src);
 	} break;
 	case Op_Rol:
 	case Op_Ror:
@@ -1297,60 +1326,104 @@ bool Emit(byte** ptr, OpCode opCode, Register dst, Register src) {
 	case Op_Cmovle:
 	case Op_Cmovng:
 	case Op_Cmovg : {
-		byte dstSize = dst >> 4;
-		byte srcSize = src >> 4;
 		if (dstSize != srcSize || dstSize == SIZE_8BIT)
 			return false;
 		
 		byte cc = ((byte)(opCode & 0x1E) >> 1);
-		uint16 op = 0x400E | (cc << 8);
-		Emit16(ptr, op, dst, src);
+		Emit(ptr, 0x0F, 0x40 | cc, dst, src);
 	} break;
+
 	case Op_Imul: {
-		byte dstSize = dst >> 4;
-		byte srcSize = src >> 4;
 		if (dstSize != srcSize || dstSize == SIZE_8BIT)
 			return false;
 
-		Emit16(ptr, 0xAF0E, dst, src);
+		Emit(ptr, 0x0F, 0xAF, dst, src);
+	} break;
+	case Op_Cmpxchg: {
+		if (dstSize != srcSize)
+			return false;
+
+		// NOTE: reverse order
+		if (dstSize == SIZE_8BIT) 
+			Emit(ptr, 0x0F, 0xB0, src, dst);
+		else
+			Emit(ptr, 0x0F, 0xB1, src, dst);
+	} break;
+	case Op_Btr: {
+		if (dstSize != srcSize || dstSize == SIZE_8BIT)
+			return false;
+
+		// NOTE: reverse order
+		Emit(ptr, 0x0F, 0xB3, src, dst);
 	} break;
 	case Op_Movzx: {
-		byte dstSize = dst >> 4;
-		byte srcSize = src >> 4;
 		if (srcSize == SIZE_8BIT) {
 			if (dstSize == SIZE_8BIT)
 				return false;
 
-			Emit16(ptr, 0xB60E, dst, src);
+			Emit(ptr, 0x0F, 0xB6, dst, src);
 		}
 		else if (srcSize == SIZE_16BIT) {
 			if (dstSize < SIZE_32BIT)
 				return false;
 
-			Emit16(ptr, 0xB70E, dst, src);
+			Emit(ptr, 0x0F, 0xB7, dst, src);
 		}
 		else {
 			return false;
 		}
 	} break;
+	case Op_Popcnt: {
+		if (dstSize != srcSize || dstSize == SIZE_8BIT)
+			return false;
+
+		Emit(ptr, 0xF3, 0x0F, 0xB8, dst, src);
+	} break;
+	case Op_Btc: {
+		if (dstSize != srcSize || dstSize == SIZE_8BIT)
+			return false;
+
+		// NOTE: reverse order
+		Emit(ptr, 0x0F, 0xBB, src, dst);
+	} break;
+	case Op_Bsf: {
+		if (dstSize != srcSize || dstSize == SIZE_8BIT)
+			return false;
+
+		Emit(ptr, 0x0F, 0xBC, dst, src);
+	} break;
+	case Op_Bsr: {
+		if (dstSize != srcSize || dstSize == SIZE_8BIT)
+			return false;
+
+		Emit(ptr, 0x0F, 0xBD, dst, src);
+	} break;
 	case Op_Movsx: {
-		byte dstSize = dst >> 4;
-		byte srcSize = src >> 4;
 		if (srcSize == SIZE_8BIT) {
 			if (dstSize == SIZE_8BIT)
 				return false;
 
-			Emit16(ptr, 0xBE0E, dst, src);
+			Emit(ptr, 0x0F, 0xBE, dst, src);
 		}
 		else if (srcSize == SIZE_16BIT) {
 			if (dstSize < SIZE_32BIT)
 				return false;
 
-			Emit16(ptr, 0xBF0E, dst, src);
+			Emit(ptr, 0x0F, 0xBF, dst, src);
 		}
 		else {
 			return false;
 		}
+	} break;
+	case Op_Xadd: {
+		if (dstSize != srcSize)
+			return false;
+
+		// NOTE: reverse order
+		if (dstSize == SIZE_8BIT) 
+			Emit(ptr, 0x0F, 0xC0, src, dst);
+		else
+			Emit(ptr, 0x0F, 0xC1, src, dst);
 	} break;
 	default: {
 		return false;
@@ -1488,17 +1561,18 @@ bool Emit(byte** ptr, OpCode opCode, Register reg, Memory mem) {
 }
 
 bool Emit(byte** ptr, OpCode opCode, Register reg, byte size, Memory mem) {
-	switch (opCode) {
-	
+	byte regSize = reg >> 4;
+
+	switch (opCode) {	
 	case Op_Movzx: {
 		if (size == SIZE_8BIT) {
-			if ((reg >> 4) == SIZE_8BIT)
+			if (regSize == SIZE_8BIT)
 				return false;
 
 			Emit16(ptr, 0xB60E, reg, mem);
 		}
 		else if (size == SIZE_16BIT) {
-			if ((reg >> 4) <= SIZE_16BIT)
+			if (regSize <= SIZE_16BIT)
 				return false;
 
 			Emit16(ptr, 0xB70E, reg, mem);
@@ -1509,13 +1583,13 @@ bool Emit(byte** ptr, OpCode opCode, Register reg, byte size, Memory mem) {
 	} break;
 	case Op_Movsx: {
 		if (size == SIZE_8BIT) {
-			if ((reg >> 4) == SIZE_8BIT)
+			if (regSize == SIZE_8BIT)
 				return false;
 
 			Emit16(ptr, 0xBE0E, reg, mem);
 		}
 		else if (size == SIZE_16BIT) {
-			if ((reg >> 4) <= SIZE_16BIT)
+			if (regSize <= SIZE_16BIT)
 				return false;
 
 			Emit16(ptr, 0xBF0E, reg, mem);
