@@ -113,54 +113,50 @@ struct Immediate {
 #define LEAVE 	0xC9
 #define NOP 	0x90
 
-void Emit(byte** ptr, byte b) {
-	*(*ptr)++ = b;
+void Emit(BigBuffer* buffer, byte b) {
+	*(buffer->pos++) = b;
 }
 
-void Emit16(byte** ptr, uint16 i) {
-	*(uint16*)*ptr = i;
-	*ptr += 2;
+void Emit16(BigBuffer* buffer, uint16 i) {
+	*(uint16*)buffer->pos = i;
+	buffer->pos += 2;
 }
 
-void Emit32(byte** ptr, uint32 i) {
-	*(uint32*)*ptr = i;
-	*ptr += 4;
+void Emit32(BigBuffer* buffer, uint32 i) {
+	*(uint32*)buffer->pos = i;
+	buffer->pos += 4;
 }
 
-void Emit64(byte** ptr, uint64 i) {
-	*(uint64*)*ptr = i;
-	*ptr += 8;
+void Emit64(BigBuffer* buffer, uint64 i) {
+	*(uint64*)buffer->pos = i;
+	buffer->pos += 8;
 }
 
-void EmitString(byte** ptr, String string) {
-	*ptr += StringCopy(string, *ptr);
-}
-
-void EmitRexPrefix(byte** ptr, byte w, byte reg, byte inx, byte b) {
+void EmitRexPrefix(BigBuffer* buffer, byte w, byte reg, byte inx, byte b) {
 	ASSERT(w == 0 || w == 1);
 	ASSERT(b == 0 || b == 1);
 
 	byte r = (reg & 8) >> 3;
 	byte x = (inx & 8) >> 3;
-	Emit(ptr, 0x40 | (w << 3) | (r << 2) | (x << 1) | (b << 0));
+	Emit(buffer, 0x40 | (w << 3) | (r << 2) | (x << 1) | (b << 0));
 }
 
-void EmitRexPrefix(byte** ptr, byte w, byte reg) {
+void EmitRexPrefix(BigBuffer* buffer, byte w, byte reg) {
 	ASSERT(w == 0 || w == 1);
 
 	byte b = (reg & 8) >> 3;
-	Emit(ptr, 0x40 | (w << 3) | b);
+	Emit(buffer, 0x40 | (w << 3) | b);
 }
 
-void EmitModRegRM(byte** ptr, byte mod, byte reg, byte r_m) {
+void EmitModRegRM(BigBuffer* buffer, byte mod, byte reg, byte r_m) {
 	ASSERT(mod < 4);
 	ASSERT(reg < 16);
 	ASSERT(r_m < 16);
 
-	Emit(ptr, (mod << 6) | ((reg & 7) << 3) | (r_m & 7) );
+	Emit(buffer, (mod << 6) | ((reg & 7) << 3) | (r_m & 7) );
 }
 
-void EmitModRegRM(byte** ptr, byte reg, Memory mem) {
+void EmitModRegRM(BigBuffer* buffer, byte reg, Memory mem) {
 	ASSERT(mem.index != 4);
 
 	byte mod, r_m;
@@ -181,36 +177,36 @@ void EmitModRegRM(byte** ptr, byte reg, Memory mem) {
 		else if (mem.disp <= 0xff) mod = 1;
 		else mod = 2;
 	}
-	EmitModRegRM(ptr, mod, reg, r_m);
+	EmitModRegRM(buffer, mod, reg, r_m);
 }
 
-void EmitSIB(byte** ptr, Memory mem) {
+void EmitSIB(BigBuffer* buffer, Memory mem) {
 	ASSERT(mem.index != 4);
 
 	if (mem.mode == Mem_IndexedAddressing) {
-		Emit(ptr, (mem.scale << 6) | ((mem.index & 7) << 3) | (mem.base & 7) );
+		Emit(buffer, (mem.scale << 6) | ((mem.index & 7) << 3) | (mem.base & 7) );
 	}
 	else if (mem.mode == Mem_IndexedAddressingNoBase) {
-		Emit(ptr, (mem.scale << 6) | ((mem.index & 7) << 3) | 5 );
+		Emit(buffer, (mem.scale << 6) | ((mem.index & 7) << 3) | 5 );
 	}
 	else if (mem.mode == Mem_AbsoluteAddressing) {
-		Emit(ptr, 0x25);
+		Emit(buffer, 0x25);
 	}
 	else if (mem.base == 4 || mem.base == 12) {
-		Emit(ptr, 0x24);
+		Emit(buffer, 0x24);
 	}
 }
 
-void EmitDisplacement(byte** ptr, Memory mem) {
+void EmitDisplacement(BigBuffer* buffer, Memory mem) {
 	if (mem.mode == Mem_RelativeToCurrent
 		|| mem.mode == Mem_AbsoluteAddressing
 		|| mem.mode == Mem_IndexedAddressingNoBase
 		|| mem.disp > 0xFF) {
 
-		Emit32(ptr, (uint32)mem.disp);
+		Emit32(buffer, (uint32)mem.disp);
 	}
 	else if (mem.disp > 0 || mem.base == 5 || mem.base == 13) {
-		Emit(ptr, (byte)mem.disp);
+		Emit(buffer, (byte)mem.disp);
 	}
 }
 
@@ -245,45 +241,45 @@ byte GetUnsignedSize(uint64 imm) {
 // MOV
 //---------------------
 
-void EmitMov(byte** ptr, Register _register, uint64 imm) {
+void EmitMov(BigBuffer* buffer, Register _register, uint64 imm) {
 	bool immIs64 = MAX_UINT32 < imm;
 
 	byte reg_size = (_register & 0xF0) >> 4;
 	byte reg = _register & 0x0F;
 
 	if (reg_size == SIZE_16BIT) {
-		Emit(ptr, 0x66);
+		Emit(buffer, 0x66);
 	}
 
 	if (immIs64 || reg > 7) {
 		byte q = immIs64 ? 1 : 0;
-		EmitRexPrefix(ptr, q, reg);
+		EmitRexPrefix(buffer, q, reg);
 	}
 	
 	// Emit mov OpCode
 	byte w = reg_size > SIZE_8BIT ? 0x08 : 0;
-	Emit(ptr, 0xB0 | w | (reg & 7));
+	Emit(buffer, 0xB0 | w | (reg & 7));
 
 	// Emit Immediate
 	if (immIs64) {
-		Emit64(ptr, imm);
+		Emit64(buffer, imm);
 	}
 	else if (reg_size >= SIZE_32BIT) {
-		Emit32(ptr, (uint32)imm);
+		Emit32(buffer, (uint32)imm);
 	}
 	else if (reg_size == SIZE_16BIT) {
-		Emit16(ptr, (uint16)imm);
+		Emit16(buffer, (uint16)imm);
 	}
 	else {
-		Emit(ptr, (byte)imm);
+		Emit(buffer, (byte)imm);
 	}
 }
 
-void EmitMov(byte** ptr, Register _register, int64 imm) {
+void EmitMov(BigBuffer* buffer, Register _register, int64 imm) {
 	bool immIs64 = MAX_INT32 < imm || imm < MAX_INT32;
 
 	if (imm >= 0) {
-		EmitMov(ptr, _register, (uint64)imm);
+		EmitMov(buffer, _register, (uint64)imm);
 		return;
 	}
 
@@ -291,312 +287,312 @@ void EmitMov(byte** ptr, Register _register, int64 imm) {
 	byte reg = _register & 0x0F;
 
 	if (reg_size == SIZE_16BIT) {
-		Emit(ptr, 0x66);
+		Emit(buffer, 0x66);
 	}
 
 	if (reg > 7 || reg_size == SIZE_64BIT) {
 		byte w = reg_size > SIZE_8BIT ? 1 : 0;
-		EmitRexPrefix(ptr, w, reg);
+		EmitRexPrefix(buffer, w, reg);
 	}
 
 	if (immIs64) {
-		Emit(ptr, 0xB8 | (reg & 7));
-		Emit64(ptr, (uint64)imm);
+		Emit(buffer, 0xB8 | (reg & 7));
+		Emit64(buffer, (uint64)imm);
 	}
 	else if (reg_size == SIZE_64BIT) {
-		Emit(ptr, 0xC7);
-		Emit(ptr, 0xC0 | (reg & 7));
-		Emit32(ptr, (uint32)(int32)imm);
+		Emit(buffer, 0xC7);
+		Emit(buffer, 0xC0 | (reg & 7));
+		Emit32(buffer, (uint32)(int32)imm);
 	}
 	else if (reg_size == SIZE_32BIT) {
-		Emit(ptr, 0xB8 | (reg & 7));
-		Emit32(ptr, (uint32)(int32)imm);
+		Emit(buffer, 0xB8 | (reg & 7));
+		Emit32(buffer, (uint32)(int32)imm);
 	}
 	else if (reg_size == SIZE_16BIT) {
-		Emit(ptr, 0xB8 | (reg & 7));
-		Emit16(ptr, (uint16)(int16)imm);
+		Emit(buffer, 0xB8 | (reg & 7));
+		Emit16(buffer, (uint16)(int16)imm);
 	}
 	else {
-		Emit(ptr, 0xB0 | (reg & 7));
-		Emit(ptr, (byte)imm);
+		Emit(buffer, 0xB0 | (reg & 7));
+		Emit(buffer, (byte)imm);
 	}
 }
 
-void EmitMov(byte** ptr, Register _register, Immediate imm) {
+void EmitMov(BigBuffer* buffer, Register _register, Immediate imm) {
 	if (imm.sx)
-		EmitMov(ptr, _register, imm.s);
+		EmitMov(buffer, _register, imm.s);
 	else
-		EmitMov(ptr, _register, imm.u);
+		EmitMov(buffer, _register, imm.u);
 }
 
 //--------------------
 
-void Emit(byte** ptr, byte op1, byte op2, Register _register) {
+void Emit(BigBuffer* buffer, byte op1, byte op2, Register _register) {
 	byte size = (_register & 0xF0) >> 4;
 	byte reg = _register & 0x0F;
 
 	if (size == SIZE_16BIT) {
-		Emit(ptr, 0x66);
+		Emit(buffer, 0x66);
 	}
 
 	if (reg > 7 || size == SIZE_64BIT) {
 		byte w = size == SIZE_64BIT || reg <= 7 ? 1 : 0;
-		EmitRexPrefix(ptr, w, reg);
+		EmitRexPrefix(buffer, w, reg);
 	}
 
 	if (size == SIZE_8BIT)
-		Emit(ptr, op1);
+		Emit(buffer, op1);
 	else
-		Emit(ptr, op1 + 1);
-	EmitModRegRM(ptr, 3, op2, reg);
+		Emit(buffer, op1 + 1);
+	EmitModRegRM(buffer, 3, op2, reg);
 }
 
-void Emit(byte** ptr, byte op1, byte op2, byte size, Memory mem) {
+void Emit(BigBuffer* buffer, byte op1, byte op2, byte size, Memory mem) {
 	if (size == SIZE_16BIT) {
-		Emit(ptr, 0x66);
+		Emit(buffer, 0x66);
 	}
 
 	if (mem.regSize == SIZE_32BIT) {
-		Emit(ptr, 0x67);
+		Emit(buffer, 0x67);
 	}
 
 	if (size == SIZE_64BIT || mem.base > 7 || mem.index > 7) {
 		byte w = size == SIZE_64BIT ? 1 : 0;
 		byte b = (mem.base & 8) >> 3;
-		EmitRexPrefix(ptr, w, 0, mem.index, b);
+		EmitRexPrefix(buffer, w, 0, mem.index, b);
 	}
 
 	if (size == SIZE_8BIT)
-		Emit(ptr, op1);
+		Emit(buffer, op1);
 	else
-		Emit(ptr, op1 + 1);
+		Emit(buffer, op1 + 1);
 
-	EmitModRegRM(ptr, op2, mem);
-	EmitSIB(ptr, mem);
-	EmitDisplacement(ptr, mem);
+	EmitModRegRM(buffer, op2, mem);
+	EmitSIB(buffer, mem);
+	EmitDisplacement(buffer, mem);
 }
 
 // used by test
-void Emit(byte** ptr, byte op, Register _register, Immediate imm) {
+void Emit(BigBuffer* buffer, byte op, Register _register, Immediate imm) {
 	byte size = (_register & 0xF0) >> 4;
 	byte reg = _register & 0x0F;
 
 	if (size == SIZE_16BIT) {
-		Emit(ptr, 0x66);
+		Emit(buffer, 0x66);
 	}
 
 	if (reg > 7 || size == SIZE_64BIT) {
 		byte w = size == SIZE_64BIT ? 1 : 0;
-		EmitRexPrefix(ptr, w, reg);
+		EmitRexPrefix(buffer, w, reg);
 	}
 
 	if (size == SIZE_8BIT)
-		Emit(ptr, op);
+		Emit(buffer, op);
 	else
-		Emit(ptr, op + 1);
-	EmitModRegRM(ptr, 3, 0, reg);
+		Emit(buffer, op + 1);
+	EmitModRegRM(buffer, 3, 0, reg);
 	
 	if (size == SIZE_8BIT)
-		Emit(ptr, (byte)imm.u);
+		Emit(buffer, (byte)imm.u);
 	else if (size == SIZE_16BIT)
-		Emit16(ptr, (uint16)imm.u);
+		Emit16(buffer, (uint16)imm.u);
 	else 
-		Emit32(ptr, (uint32)imm.u);
+		Emit32(buffer, (uint32)imm.u);
 }
 
-void Emit(byte** ptr, byte op, Register dst, Register src) {
+void Emit(BigBuffer* buffer, byte op, Register dst, Register src) {
 	byte size = dst >> 4;
 	byte reg1 = dst & 0x0F;
 	byte reg2 = src & 0x0F;
 
 	if (size == SIZE_16BIT) {
-		Emit(ptr, 0x66);
+		Emit(buffer, 0x66);
 	}
 
 	if (size == SIZE_64BIT || reg1 > 7 || reg2 > 7) {
 		byte w = size == SIZE_64BIT ? 1 : 0;
 		byte b = (reg1 & 8) >> 3;
-		EmitRexPrefix(ptr, w, reg2, 0, b);
+		EmitRexPrefix(buffer, w, reg2, 0, b);
 	}
 
 	if (size == SIZE_8BIT)
-		Emit(ptr, op);
+		Emit(buffer, op);
 	else
-		Emit(ptr, op+1);
-	EmitModRegRM(ptr, 3, reg2, reg1);
+		Emit(buffer, op+1);
+	EmitModRegRM(buffer, 3, reg2, reg1);
 }
 
-void Emit(byte** ptr, byte op1, byte op2, Register dst, Register src) {
+void Emit(BigBuffer* buffer, byte op1, byte op2, Register dst, Register src) {
 	byte size = dst >> 4;
 	byte reg2 = dst & 0x0F;
 	byte reg1 = src & 0x0F;
 
 	if (size == SIZE_16BIT) {
-		Emit(ptr, 0x66);
+		Emit(buffer, 0x66);
 	}
 
 	if (size == SIZE_64BIT || reg1 > 7 || reg2 > 7) {
 		byte w = size == SIZE_64BIT ? 1 : 0;
 		byte b = (reg1 & 8) >> 3;
-		EmitRexPrefix(ptr, w, reg2, 0, b);
+		EmitRexPrefix(buffer, w, reg2, 0, b);
 	}
 
-	Emit(ptr, op1);
-	Emit(ptr, op2);
-	EmitModRegRM(ptr, 3, reg2, reg1);
+	Emit(buffer, op1);
+	Emit(buffer, op2);
+	EmitModRegRM(buffer, 3, reg2, reg1);
 }
 
-void Emit(byte** ptr, byte op1, byte op2, byte op3, Register dst, Register src) {
+void Emit(BigBuffer* buffer, byte op1, byte op2, byte op3, Register dst, Register src) {
 	byte size = dst >> 4;
 	byte reg2 = dst & 0x0F;
 	byte reg1 = src & 0x0F;
 
 	if (size == SIZE_16BIT) {
-		Emit(ptr, 0x66);
+		Emit(buffer, 0x66);
 	}
 
 	if (size == SIZE_64BIT || reg1 > 7 || reg2 > 7) {
 		byte w = size == SIZE_64BIT ? 1 : 0;
 		byte b = (reg1 & 8) >> 3;
-		EmitRexPrefix(ptr, w, reg2, 0, b);
+		EmitRexPrefix(buffer, w, reg2, 0, b);
 	}
 
-	Emit(ptr, op1);
-	Emit(ptr, op2);
-	Emit(ptr, op3);
-	EmitModRegRM(ptr, 3, reg2, reg1);
+	Emit(buffer, op1);
+	Emit(buffer, op2);
+	Emit(buffer, op3);
+	EmitModRegRM(buffer, 3, reg2, reg1);
 }
 
-void Emit(byte** ptr, byte op, Register _register, Memory mem) {
+void Emit(BigBuffer* buffer, byte op, Register _register, Memory mem) {
 	byte size = (_register & 0xF0) >> 4;
 	byte reg = _register & 0x0F;
 
 	if (mem.regSize == SIZE_32BIT) {
-		Emit(ptr, 0x67);
+		Emit(buffer, 0x67);
 	}
 
 	if (size == SIZE_16BIT) {
-		Emit(ptr, 0x66);
+		Emit(buffer, 0x66);
 	}
 
 	if (size == SIZE_64BIT || reg > 7 || mem.base > 7 || mem.index > 7) {
 		byte w = size == SIZE_64BIT ? 1 : 0;
 		byte b = (mem.base & 8) >> 3;
-		EmitRexPrefix(ptr, w, reg, mem.index, b);
+		EmitRexPrefix(buffer, w, reg, mem.index, b);
 	}
 
 	if (size == SIZE_8BIT)
-		Emit(ptr, op);
+		Emit(buffer, op);
 	else
-		Emit(ptr, op + 1);
+		Emit(buffer, op + 1);
 
-	EmitModRegRM(ptr, reg, mem);
-	EmitSIB(ptr, mem);
-	EmitDisplacement(ptr, mem);
+	EmitModRegRM(buffer, reg, mem);
+	EmitSIB(buffer, mem);
+	EmitDisplacement(buffer, mem);
 }
 
-void Emit16(byte** ptr, uint16 op, Register _register, Memory mem) {
+void Emit16(BigBuffer* buffer, uint16 op, Register _register, Memory mem) {
 	byte size = (_register & 0xF0) >> 4;
 	byte reg = _register & 0x0F;
 
 	if (mem.regSize == SIZE_32BIT) {
-		Emit(ptr, 0x67);
+		Emit(buffer, 0x67);
 	}
 
 	if (size == SIZE_16BIT) {
-		Emit(ptr, 0x66);
+		Emit(buffer, 0x66);
 	}
 
 	if (size == SIZE_64BIT || reg > 7 || mem.base > 7 || mem.index > 7) {
 		byte w = size == SIZE_64BIT ? 1 : 0;
 		byte b = (mem.base & 8) >> 3;
-		EmitRexPrefix(ptr, w, reg, mem.index, b);
+		EmitRexPrefix(buffer, w, reg, mem.index, b);
 	}
 
 	if (size == SIZE_8BIT)
-		Emit16(ptr, op);
+		Emit16(buffer, op);
 	else
-		Emit16(ptr, op + 1);
+		Emit16(buffer, op + 1);
 
-	EmitModRegRM(ptr, reg, mem);
-	EmitSIB(ptr, mem);
-	EmitDisplacement(ptr, mem);
+	EmitModRegRM(buffer, reg, mem);
+	EmitSIB(buffer, mem);
+	EmitDisplacement(buffer, mem);
 }
 
-void Emit(byte** ptr, byte op, byte size, Memory mem, Immediate imm) {
+void Emit(BigBuffer* buffer, byte op, byte size, Memory mem, Immediate imm) {
 	if (mem.regSize == SIZE_32BIT) {
-		Emit(ptr, 0x67);
+		Emit(buffer, 0x67);
 	}
 
 	if (size == SIZE_16BIT) {
-		Emit(ptr, 0x66);
+		Emit(buffer, 0x66);
 	}
 
 	if (size == SIZE_64BIT || mem.base > 7 || mem.index > 7) {
 		byte w = size == SIZE_64BIT ? 1 : 0;
 		byte b = (mem.base & 8) >> 3;
-		EmitRexPrefix(ptr, w, 0, mem.index, b);
+		EmitRexPrefix(buffer, w, 0, mem.index, b);
 	}
 
 	if (size == SIZE_8BIT)
-		Emit(ptr, op);
+		Emit(buffer, op);
 	else
-		Emit(ptr, op + 1);
+		Emit(buffer, op + 1);
 
-	EmitModRegRM(ptr, 0, mem);
-	EmitSIB(ptr, mem);
-	EmitDisplacement(ptr, mem);
+	EmitModRegRM(buffer, 0, mem);
+	EmitSIB(buffer, mem);
+	EmitDisplacement(buffer, mem);
 
 	if (size == SIZE_8BIT) {
-		Emit(ptr, (byte)imm.u);
+		Emit(buffer, (byte)imm.u);
 	}
 	else if (size == SIZE_16BIT) {
-		Emit16(ptr, (uint16)imm.u);
+		Emit16(buffer, (uint16)imm.u);
 	}
 	else {
-		Emit32(ptr, (uint32)imm.u);
+		Emit32(buffer, (uint32)imm.u);
 	}
 }
 
-void Emit(byte** ptr, byte op, Memory mem, Register _register) {
+void Emit(BigBuffer* buffer, byte op, Memory mem, Register _register) {
 	byte size = (_register & 0xF0) >> 4;
 	byte reg = _register & 0x0F;
 
 	if (mem.regSize == SIZE_32BIT) {
-		Emit(ptr, 0x67);
+		Emit(buffer, 0x67);
 	}
 
 	if (size == SIZE_16BIT) {
-		Emit(ptr, 0x66);
+		Emit(buffer, 0x66);
 	}
 
 	if (size == SIZE_64BIT || reg > 7 || mem.base > 7 || mem.index > 7) {
 		byte w = size == SIZE_64BIT ? 1 : 0;
 		byte b = (mem.base & 8) >> 3;
-		EmitRexPrefix(ptr, w, reg, mem.index, b);
+		EmitRexPrefix(buffer, w, reg, mem.index, b);
 	}
 
 	if (size == SIZE_8BIT) {
-		Emit(ptr, op);
+		Emit(buffer, op);
 	}
 	else {
-		Emit(ptr, op + 1);
+		Emit(buffer, op + 1);
 	}
 
-	EmitModRegRM(ptr, reg, mem);
-	EmitSIB(ptr, mem);
-	EmitDisplacement(ptr, mem);
+	EmitModRegRM(buffer, reg, mem);
+	EmitSIB(buffer, mem);
+	EmitDisplacement(buffer, mem);
 }
 
-void Emit(byte** ptr, byte op, Register register1, Register register2, Immediate imm) {
+void Emit(BigBuffer* buffer, byte op, Register register1, Register register2, Immediate imm) {
 	byte imm_size = GetSignedSize(imm);
-	Emit(ptr, op, register2, register1);
+	Emit(buffer, op, register2, register1);
 
 	if (imm_size == SIZE_8BIT) {
-		Emit(ptr, (byte)imm.u);
+		Emit(buffer, (byte)imm.u);
 	}
 	else {
-		Emit32(ptr, (uint32)imm.u);
+		Emit32(buffer, (uint32)imm.u);
 	}
 }
 
@@ -617,75 +613,75 @@ void Emit(byte** ptr, byte op, Register register1, Register register2, Immediate
 #define XOR 6
 #define CMP 7
 
-void Emit_80(byte** ptr, byte op, Register _register, Immediate imm) {
+void Emit_80(BigBuffer* buffer, byte op, Register _register, Immediate imm) {
 	byte imm_size = GetSignedSize(imm);
 	byte reg_size = (_register & 0xF0) >> 4;
 	byte reg = _register & 0x0F;
 
 	if (reg_size == SIZE_16BIT) {
-		Emit(ptr, 0x66);
+		Emit(buffer, 0x66);
 	}
 
 	if (reg > 7 || reg_size == SIZE_64BIT) {
 		byte w = reg_size == SIZE_64BIT ? 1 : 0;
-		EmitRexPrefix(ptr, w, reg);
+		EmitRexPrefix(buffer, w, reg);
 	}
 
 	if (reg_size == SIZE_8BIT)
-		Emit(ptr, 0x80);
+		Emit(buffer, 0x80);
 	else if (imm_size == SIZE_8BIT)
-		Emit(ptr, 0x83);
+		Emit(buffer, 0x83);
 	else
-		Emit(ptr, 0x81);
+		Emit(buffer, 0x81);
 
-	EmitModRegRM(ptr, 3, op, reg);
+	EmitModRegRM(buffer, 3, op, reg);
 
 	if (imm_size == SIZE_8BIT) {
-		Emit(ptr, (byte)imm.u);
+		Emit(buffer, (byte)imm.u);
 	}
 	else if (reg_size == SIZE_16BIT) {
-		Emit16(ptr, (uint16)imm.u);
+		Emit16(buffer, (uint16)imm.u);
 	}
 	else {
-		Emit32(ptr, (uint32)imm.u);
+		Emit32(buffer, (uint32)imm.u);
 	}
 }
 
-void Emit_80(byte** ptr, byte op, byte size, Memory mem, Immediate imm) {
+void Emit_80(BigBuffer* buffer, byte op, byte size, Memory mem, Immediate imm) {
 	byte imm_size = GetSignedSize(imm);
 	if (mem.regSize == SIZE_32BIT) {
-		Emit(ptr, 0x67);
+		Emit(buffer, 0x67);
 	}
 
 	if (size == SIZE_16BIT) {
-		Emit(ptr, 0x66);
+		Emit(buffer, 0x66);
 	}
 
 	if (size == SIZE_64BIT || mem.base > 7 || mem.index > 7) {
 		byte w = size == SIZE_64BIT ? 1 : 0;
 		byte b = (mem.base & 8) >> 3;
-		EmitRexPrefix(ptr, w, 0, mem.index, b);
+		EmitRexPrefix(buffer, w, 0, mem.index, b);
 	}
 
 	if (size == SIZE_8BIT)
-		Emit(ptr, 0x80);
+		Emit(buffer, 0x80);
 	else if (imm_size == SIZE_8BIT)
-		Emit(ptr, 0x83);
+		Emit(buffer, 0x83);
 	else
-		Emit(ptr, 0x81);
+		Emit(buffer, 0x81);
 
-	EmitModRegRM(ptr, op, mem);
-	EmitSIB(ptr, mem);
-	EmitDisplacement(ptr, mem);
+	EmitModRegRM(buffer, op, mem);
+	EmitSIB(buffer, mem);
+	EmitDisplacement(buffer, mem);
 
 	if (imm_size == SIZE_8BIT) {
-		Emit(ptr, (byte)imm.u);
+		Emit(buffer, (byte)imm.u);
 	}
 	else if (size == SIZE_16BIT && imm_size == SIZE_16BIT) {
-		Emit16(ptr, (uint16)imm.u);
+		Emit16(buffer, (uint16)imm.u);
 	}
 	else {
-		Emit32(ptr, (uint32)imm.u);
+		Emit32(buffer, (uint32)imm.u);
 	}
 }
 
@@ -704,94 +700,94 @@ void Emit_80(byte** ptr, byte op, byte size, Memory mem, Immediate imm) {
 #define SHR 5
 #define SAR 7
 
-void Emit_C0(byte** ptr, byte op, Register _register, Immediate imm) {
+void Emit_C0(BigBuffer* buffer, byte op, Register _register, Immediate imm) {
 	byte size = (_register & 0xF0) >> 4;
 	byte reg = _register & 0x0F;
 
 	if (size == SIZE_16BIT) {
-		Emit(ptr, 0x66);
+		Emit(buffer, 0x66);
 	}
 
 	if (reg > 7 || size == SIZE_64BIT) {
 		byte w = size == SIZE_64BIT ? 1 : 0;
-		EmitRexPrefix(ptr, w, reg);
+		EmitRexPrefix(buffer, w, reg);
 	}
 
 	if (size == SIZE_8BIT)
-		Emit(ptr, 0xC0);
+		Emit(buffer, 0xC0);
 	else
-		Emit(ptr, 0xC1);
-	EmitModRegRM(ptr, 3, op, reg);
-	Emit(ptr, (byte)imm.u);
+		Emit(buffer, 0xC1);
+	EmitModRegRM(buffer, 3, op, reg);
+	Emit(buffer, (byte)imm.u);
 }
 
-void Emit_C0(byte** ptr, byte op, byte size, Memory mem, Immediate imm) {
+void Emit_C0(BigBuffer* buffer, byte op, byte size, Memory mem, Immediate imm) {
 	if (mem.regSize == SIZE_32BIT) {
-		Emit(ptr, 0x67);
+		Emit(buffer, 0x67);
 	}
 
 	if (size == SIZE_16BIT) {
-		Emit(ptr, 0x66);
+		Emit(buffer, 0x66);
 	}
 
 	if (size == SIZE_64BIT || mem.base > 7 || mem.index > 7) {
 		byte w = size == SIZE_64BIT ? 1 : 0;
 		byte b = (mem.base & 8) >> 3;
-		EmitRexPrefix(ptr, w, 0, mem.index, b);
+		EmitRexPrefix(buffer, w, 0, mem.index, b);
 	}
 
 	if (size == SIZE_8BIT)
-		Emit(ptr, 0xC0);
+		Emit(buffer, 0xC0);
 	else 
-		Emit(ptr, 0xC1);
+		Emit(buffer, 0xC1);
 
-	EmitModRegRM(ptr, op, mem);
-	EmitSIB(ptr, mem);
-	EmitDisplacement(ptr, mem);
+	EmitModRegRM(buffer, op, mem);
+	EmitSIB(buffer, mem);
+	EmitDisplacement(buffer, mem);
 
-	Emit(ptr, (byte)imm.u);
+	Emit(buffer, (byte)imm.u);
 }
 
 //--------------------
 
-int32* EmitIndirectJmp(byte** ptr) {
-	Emit(ptr, 0xFF);
-	Emit(ptr, 0x25);
-	byte* offset = *ptr;
-	*ptr += 4;
+int32* EmitIndirectJmp(BigBuffer* buffer) {
+	Emit(buffer, 0xFF);
+	Emit(buffer, 0x25);
+	byte* offset = buffer->pos;
+	buffer->pos += 4;
 	return (int32*)offset;
 }
 
 // Pop
 //------------------
 
-void EmitPop(byte** ptr, byte size, Memory mem) {
+void EmitPop(BigBuffer* buffer, byte size, Memory mem) {
 	if (size == SIZE_16BIT) {
-		Emit(ptr, 0x66);
+		Emit(buffer, 0x66);
 	}
 
 	if (mem.regSize == SIZE_32BIT) {
-		Emit(ptr, 0x67);
+		Emit(buffer, 0x67);
 	}
 
 	if (mem.base > 7 || mem.index > 7) {
 		byte w = size == SIZE_64BIT ? 1 : 0;
 		byte b = (mem.base & 8) >> 3;
-		EmitRexPrefix(ptr, w, 0, mem.index, b);
+		EmitRexPrefix(buffer, w, 0, mem.index, b);
 	}
 
-	Emit(ptr, 0x8F);
+	Emit(buffer, 0x8F);
 
-	EmitModRegRM(ptr, 0, mem);
-	EmitSIB(ptr, mem);
-	EmitDisplacement(ptr, mem);
+	EmitModRegRM(buffer, 0, mem);
+	EmitSIB(buffer, mem);
+	EmitDisplacement(buffer, mem);
 }
 
-void EmitPop(byte** ptr, Register _register) {
+void EmitPop(BigBuffer* buffer, Register _register) {
 	byte reg = _register & 0x0F;
 
-	if (reg > 7) Emit(ptr, 0x41);
-	Emit(ptr, 0x58 | (reg & 7));
+	if (reg > 7) Emit(buffer, 0x41);
+	Emit(buffer, 0x58 | (reg & 7));
 }
 
 //-------------
@@ -817,128 +813,128 @@ enum XMM : byte {
 	REG_XMM_count
 };
 
-void EmitCvtsi2ss(byte** ptr, XMM dst, Register src) {
+void EmitCvtsi2ss(BigBuffer* buffer, XMM dst, Register src) {
 	byte reg1 = dst & 0x0F;
 	byte reg2 = src & 0x0F;
 
-	Emit(ptr, 0xF3);
+	Emit(buffer, 0xF3);
 
 	if (reg1 > 7 || reg2 > 7) {
 		byte b = (reg2 & 8) >> 3;
-		EmitRexPrefix(ptr, 0, reg1, 0, b);
+		EmitRexPrefix(buffer, 0, reg1, 0, b);
 	}
 
-	Emit(ptr, 0x0F);
-	Emit(ptr, 0x2A);
-	EmitModRegRM(ptr, 3, reg1, reg2);
+	Emit(buffer, 0x0F);
+	Emit(buffer, 0x2A);
+	EmitModRegRM(buffer, 3, reg1, reg2);
 }
 
-void Emit(byte** ptr, byte op, XMM dst, XMM src, bool prefix) {
+void Emit(BigBuffer* buffer, byte op, XMM dst, XMM src, bool prefix) {
 	byte reg1 = dst & 0x0F;
 	byte reg2 = src & 0x0F;
 
 	if (prefix)
-		Emit(ptr, 0xF3);
+		Emit(buffer, 0xF3);
 
 	if (reg1 > 7 || reg2 > 7) {
 		byte b = (reg2 & 8) >> 3;
-		EmitRexPrefix(ptr, 0, reg1, 0, b);
+		EmitRexPrefix(buffer, 0, reg1, 0, b);
 	}
 
-	Emit(ptr, 0x0F);
-	Emit(ptr, op);
-	EmitModRegRM(ptr, 3, reg1, reg2);
+	Emit(buffer, 0x0F);
+	Emit(buffer, op);
+	EmitModRegRM(buffer, 3, reg1, reg2);
 }
 
-void EmitMovss(byte** ptr, XMM dst, XMM src) {
+void EmitMovss(BigBuffer* buffer, XMM dst, XMM src) {
 	byte reg1 = dst & 0x0F;
 	byte reg2 = src & 0x0F;
 
-	Emit(ptr, 0xF3);
+	Emit(buffer, 0xF3);
 
 	if (reg1 > 7 || reg2 > 7) {
 		byte b = (reg2 & 8) >> 3;
-		EmitRexPrefix(ptr, 0, reg1, 0, b);
+		EmitRexPrefix(buffer, 0, reg1, 0, b);
 	}
 
-	Emit16(ptr, 0x100F);
-	EmitModRegRM(ptr, 3, reg1, reg2);
+	Emit16(buffer, 0x100F);
+	EmitModRegRM(buffer, 3, reg1, reg2);
 }
 
-void EmitMovss(byte** ptr, XMM xmm, Memory mem) {
+void EmitMovss(BigBuffer* buffer, XMM xmm, Memory mem) {
 	byte reg = xmm & 0x0F;
 
 	if (mem.regSize == SIZE_32BIT) {
-		Emit(ptr, 0x67);
+		Emit(buffer, 0x67);
 	}
 
-	Emit(ptr, 0xF3);
+	Emit(buffer, 0xF3);
 
 	if (reg > 7 || mem.base > 7 || mem.index > 7) {
 		byte b = (mem.base & 8) >> 3;
-		EmitRexPrefix(ptr, 0, reg, mem.index, b);
+		EmitRexPrefix(buffer, 0, reg, mem.index, b);
 	}
 
-	Emit16(ptr, 0x100F);
+	Emit16(buffer, 0x100F);
 
-	EmitModRegRM(ptr, reg, mem);
-	EmitSIB(ptr, mem);
-	EmitDisplacement(ptr, mem);
+	EmitModRegRM(buffer, reg, mem);
+	EmitSIB(buffer, mem);
+	EmitDisplacement(buffer, mem);
 }
 
-void EmitMovss(byte** ptr, Memory mem, XMM xmm) {
+void EmitMovss(BigBuffer* buffer, Memory mem, XMM xmm) {
 	byte reg = xmm & 0x0F;
 
 	if (mem.regSize == SIZE_32BIT) {
-		Emit(ptr, 0x67);
+		Emit(buffer, 0x67);
 	}
 
-	Emit(ptr, 0xF3);
+	Emit(buffer, 0xF3);
 
 	if (reg > 7 || mem.base > 7 || mem.index > 7) {
 		byte b = (mem.base & 8) >> 3;
-		EmitRexPrefix(ptr, 0, reg, mem.index, b);
+		EmitRexPrefix(buffer, 0, reg, mem.index, b);
 	}
 
-	Emit16(ptr, 0x110F);
+	Emit16(buffer, 0x110F);
 
-	EmitModRegRM(ptr, reg, mem);
-	EmitSIB(ptr, mem);
-	EmitDisplacement(ptr, mem);
+	EmitModRegRM(buffer, reg, mem);
+	EmitSIB(buffer, mem);
+	EmitDisplacement(buffer, mem);
 }
 
-void EmitCvttss2si(byte** ptr, Register dst, XMM src) {
+void EmitCvttss2si(BigBuffer* buffer, Register dst, XMM src) {
 	byte size = dst >> 4;
 	byte reg1 = dst & 0x0F;
 	byte reg2 = src & 0x0F;
 
-	Emit(ptr, 0xF3);
+	Emit(buffer, 0xF3);
 
 	if (size == SIZE_64BIT || reg1 > 7 || reg2 > 7) {
 		byte w = size == SIZE_64BIT ? 1 : 0;
 		byte b = (reg2 & 8) >> 3;
-		EmitRexPrefix(ptr, w, reg1, 0, b);
+		EmitRexPrefix(buffer, w, reg1, 0, b);
 	}
 
-	Emit16(ptr, 0x2C0F);
-	EmitModRegRM(ptr, 3, reg1, reg2);
+	Emit16(buffer, 0x2C0F);
+	EmitModRegRM(buffer, 3, reg1, reg2);
 }
 
-void EmitRoundss(byte** ptr, XMM dst, XMM src, Immediate imm) {
+void EmitRoundss(BigBuffer* buffer, XMM dst, XMM src, Immediate imm) {
 	byte reg1 = dst & 0x0F;
 	byte reg2 = src & 0x0F;
 
-	Emit(ptr, 0x66);
+	Emit(buffer, 0x66);
 
 	if (reg1 > 7 || reg2 > 7) {
 		byte b = (reg1 & 8) >> 3;
-		EmitRexPrefix(ptr, 0, reg2, 0, b);
+		EmitRexPrefix(buffer, 0, reg2, 0, b);
 	}
 
-	Emit16(ptr, 0x3A0F);
-	Emit(ptr, 0x0A);
-	EmitModRegRM(ptr, 3, reg2, reg1);
-	Emit(ptr, (byte)imm.u);
+	Emit16(buffer, 0x3A0F);
+	Emit(buffer, 0x0A);
+	EmitModRegRM(buffer, 3, reg2, reg1);
+	Emit(buffer, (byte)imm.u);
 }
 
 //-------------
@@ -1083,30 +1079,30 @@ enum OpCode : int32 {
 	Op_Cvtsi2ss,
 };
 
-bool Emit(byte** ptr, OpCode opCode) {
-	Emit(ptr, (byte)opCode);
+bool Emit(BigBuffer* buffer, OpCode opCode) {
+	Emit(buffer, (byte)opCode);
 	return true;
 }
 
-bool Emit(byte** ptr, OpCode opCode, Immediate imm) {
+bool Emit(BigBuffer* buffer, OpCode opCode, Immediate imm) {
 	switch (opCode) {
 	case Op_Call: {
-		Emit(ptr, 0xE8);
-		Emit32(ptr, (uint32)imm.u);
+		Emit(buffer, 0xE8);
+		Emit32(buffer, (uint32)imm.u);
 	} break;
 	case Op_Jmp: {
-		Emit(ptr, 0xE9);
-		Emit32(ptr, (uint32)imm.u);
+		Emit(buffer, 0xE9);
+		Emit32(buffer, (uint32)imm.u);
 	} break;
 	case Op_Push: {
 		byte size = GetSignedSize(imm);
 		if (size == SIZE_8BIT) {
-			Emit(ptr, 0x6A);
-			Emit(ptr, (byte)imm.u);
+			Emit(buffer, 0x6A);
+			Emit(buffer, (byte)imm.u);
 		}
 		else {
-			Emit(ptr, 0x68);
-			Emit32(ptr, (uint32)imm.u);
+			Emit(buffer, 0x68);
+			Emit32(buffer, (uint32)imm.u);
 		}
 	} break;
 	case Op_Jo :
@@ -1133,9 +1129,9 @@ bool Emit(byte** ptr, OpCode opCode, Immediate imm) {
 	case Op_Jng:
 	case Op_Jg : {
 		byte cc = ((byte)(opCode & 0x1E) >> 1);
-		Emit(ptr, 0x0F);
-		Emit(ptr, 0x80 | cc);
-		Emit32(ptr, (uint32)imm.u);
+		Emit(buffer, 0x0F);
+		Emit(buffer, 0x80 | cc);
+		Emit32(buffer, (uint32)imm.u);
 	} break;
 	default: {
 		return false;
@@ -1145,10 +1141,10 @@ bool Emit(byte** ptr, OpCode opCode, Immediate imm) {
 	return true;
 }
 
-bool Emit(byte** ptr, OpCode opCode, Register reg) {
+bool Emit(BigBuffer* buffer, OpCode opCode, Register reg) {
 	switch (opCode) {
 	case Op_Pop: {
-		EmitPop(ptr, reg);
+		EmitPop(buffer, reg);
 	} break;
 	case Op_Inc:
 	case Op_Dec:
@@ -1157,7 +1153,7 @@ bool Emit(byte** ptr, OpCode opCode, Register reg) {
 	case Op_Jmp:
 	case Op_Jmp_Far: {
 		byte op = (byte)(opCode & 7);
-		Emit(ptr, 0xFE, op, reg);
+		Emit(buffer, 0xFE, op, reg);
 	} break;
 	case Op_Not:
 	case Op_Neg:
@@ -1166,7 +1162,7 @@ bool Emit(byte** ptr, OpCode opCode, Register reg) {
 	case Op_Div:
 	case Op_Idiv: {
 		byte op = (byte)(opCode & 7);
-		Emit(ptr, 0xF6, op, reg);
+		Emit(buffer, 0xF6, op, reg);
 	} break;
 	case Op_Rol:
 	case Op_Ror:
@@ -1176,7 +1172,7 @@ bool Emit(byte** ptr, OpCode opCode, Register reg) {
 	case Op_Shr:
 	case Op_Sar: {
 		byte op = (byte)(opCode & 7);
-		Emit(ptr, 0xD2, op, reg);
+		Emit(buffer, 0xD2, op, reg);
 	} break;
 	default: {
 		return false;
@@ -1186,7 +1182,7 @@ bool Emit(byte** ptr, OpCode opCode, Register reg) {
 	return true;
 }
 
-bool Emit(byte** ptr, OpCode opCode, byte size, Memory mem) {
+bool Emit(BigBuffer* buffer, OpCode opCode, byte size, Memory mem) {
 	switch (opCode) {
 	case Op_Inc:
 	case Op_Dec:
@@ -1196,7 +1192,7 @@ bool Emit(byte** ptr, OpCode opCode, byte size, Memory mem) {
 	case Op_Jmp_Far:
 	case Op_Push: {
 		byte op = (byte)(opCode & 7);
-		Emit(ptr, 0xFE, op, size, mem);
+		Emit(buffer, 0xFE, op, size, mem);
 	} break;
 	case Op_Not:
 	case Op_Neg:
@@ -1205,7 +1201,7 @@ bool Emit(byte** ptr, OpCode opCode, byte size, Memory mem) {
 	case Op_Div:
 	case Op_Idiv: {
 		byte op = (byte)(opCode & 7);
-		Emit(ptr, 0xF6, op, size, mem);
+		Emit(buffer, 0xF6, op, size, mem);
 	} break;
 	case Op_Rol:
 	case Op_Ror:
@@ -1215,10 +1211,10 @@ bool Emit(byte** ptr, OpCode opCode, byte size, Memory mem) {
 	case Op_Shr:
 	case Op_Sar: {
 		byte op = (byte)(opCode & 7);
-		Emit(ptr, 0xD2, op, size, mem);
+		Emit(buffer, 0xD2, op, size, mem);
 	} break;
 	case Op_Pop: {
-		EmitPop(ptr, size, mem);
+		EmitPop(buffer, size, mem);
 	} break;
 	default: {
 		return false;
@@ -1228,10 +1224,10 @@ bool Emit(byte** ptr, OpCode opCode, byte size, Memory mem) {
 	return true;
 }
 
-bool Emit(byte** ptr, OpCode opCode, Register reg, Immediate imm) {
+bool Emit(BigBuffer* buffer, OpCode opCode, Register reg, Immediate imm) {
 	switch (opCode) {
 	case Op_Mov:	{
-		EmitMov(ptr, reg, imm);
+		EmitMov(buffer, reg, imm);
 	} break;
 	case Op_Add:
 	case Op_Or :
@@ -1243,10 +1239,10 @@ bool Emit(byte** ptr, OpCode opCode, Register reg, Immediate imm) {
 	case Op_Cmp: {
 		byte op = (byte)(opCode & 7);
 
-		Emit_80(ptr, op, reg, imm);
+		Emit_80(buffer, op, reg, imm);
 	} break;
 	case Op_Test: {
-		Emit(ptr, 0xF6, reg, imm);
+		Emit(buffer, 0xF6, reg, imm);
 	} break;
 	case Op_Rol:
 	case Op_Ror:
@@ -1257,7 +1253,7 @@ bool Emit(byte** ptr, OpCode opCode, Register reg, Immediate imm) {
 	case Op_Sar: {
 		byte op = (byte)(opCode & 7);
 
-		Emit_C0(ptr, op, reg, imm);
+		Emit_C0(buffer, op, reg, imm);
 	} break;
 	default: {
 		return false;
@@ -1267,7 +1263,7 @@ bool Emit(byte** ptr, OpCode opCode, Register reg, Immediate imm) {
 	return true;
 }
 
-bool Emit(byte** ptr, OpCode opCode, Register dst, Register src) {
+bool Emit(BigBuffer* buffer, OpCode opCode, Register dst, Register src) {
 	byte dstSize = dst >> 4;
 	byte srcSize = src >> 4;
 
@@ -1282,13 +1278,13 @@ bool Emit(byte** ptr, OpCode opCode, Register dst, Register src) {
 	case Op_Cmp: {
 		byte op = (byte)(opCode & 7);
 
-		Emit(ptr, op << 3, dst, src);
+		Emit(buffer, op << 3, dst, src);
 	} break;
 	case Op_Test: {
-		Emit(ptr, 0x84, dst, src);
+		Emit(buffer, 0x84, dst, src);
 	} break;
 	case Op_Mov: {
-		Emit(ptr, 0x88, dst, src);
+		Emit(buffer, 0x88, dst, src);
 	} break;
 	case Op_Rol:
 	case Op_Ror:
@@ -1301,7 +1297,7 @@ bool Emit(byte** ptr, OpCode opCode, Register dst, Register src) {
 			return false;
 
 		byte op = (byte)(opCode & 7);
-		Emit(ptr, 0xD2, op, dst);
+		Emit(buffer, 0xD2, op, dst);
 	} break;
 	case Op_Cmovo :
 	case Op_Cmovno:
@@ -1330,14 +1326,14 @@ bool Emit(byte** ptr, OpCode opCode, Register dst, Register src) {
 			return false;
 		
 		byte cc = ((byte)(opCode & 0x1E) >> 1);
-		Emit(ptr, 0x0F, 0x40 | cc, dst, src);
+		Emit(buffer, 0x0F, 0x40 | cc, dst, src);
 	} break;
 
 	case Op_Imul: {
 		if (dstSize != srcSize || dstSize == SIZE_8BIT)
 			return false;
 
-		Emit(ptr, 0x0F, 0xAF, dst, src);
+		Emit(buffer, 0x0F, 0xAF, dst, src);
 	} break;
 	case Op_Cmpxchg: {
 		if (dstSize != srcSize)
@@ -1345,29 +1341,29 @@ bool Emit(byte** ptr, OpCode opCode, Register dst, Register src) {
 
 		// NOTE: reverse order
 		if (dstSize == SIZE_8BIT) 
-			Emit(ptr, 0x0F, 0xB0, src, dst);
+			Emit(buffer, 0x0F, 0xB0, src, dst);
 		else
-			Emit(ptr, 0x0F, 0xB1, src, dst);
+			Emit(buffer, 0x0F, 0xB1, src, dst);
 	} break;
 	case Op_Btr: {
 		if (dstSize != srcSize || dstSize == SIZE_8BIT)
 			return false;
 
 		// NOTE: reverse order
-		Emit(ptr, 0x0F, 0xB3, src, dst);
+		Emit(buffer, 0x0F, 0xB3, src, dst);
 	} break;
 	case Op_Movzx: {
 		if (srcSize == SIZE_8BIT) {
 			if (dstSize == SIZE_8BIT)
 				return false;
 
-			Emit(ptr, 0x0F, 0xB6, dst, src);
+			Emit(buffer, 0x0F, 0xB6, dst, src);
 		}
 		else if (srcSize == SIZE_16BIT) {
 			if (dstSize < SIZE_32BIT)
 				return false;
 
-			Emit(ptr, 0x0F, 0xB7, dst, src);
+			Emit(buffer, 0x0F, 0xB7, dst, src);
 		}
 		else {
 			return false;
@@ -1377,39 +1373,39 @@ bool Emit(byte** ptr, OpCode opCode, Register dst, Register src) {
 		if (dstSize != srcSize || dstSize == SIZE_8BIT)
 			return false;
 
-		Emit(ptr, 0xF3, 0x0F, 0xB8, dst, src);
+		Emit(buffer, 0xF3, 0x0F, 0xB8, dst, src);
 	} break;
 	case Op_Btc: {
 		if (dstSize != srcSize || dstSize == SIZE_8BIT)
 			return false;
 
 		// NOTE: reverse order
-		Emit(ptr, 0x0F, 0xBB, src, dst);
+		Emit(buffer, 0x0F, 0xBB, src, dst);
 	} break;
 	case Op_Bsf: {
 		if (dstSize != srcSize || dstSize == SIZE_8BIT)
 			return false;
 
-		Emit(ptr, 0x0F, 0xBC, dst, src);
+		Emit(buffer, 0x0F, 0xBC, dst, src);
 	} break;
 	case Op_Bsr: {
 		if (dstSize != srcSize || dstSize == SIZE_8BIT)
 			return false;
 
-		Emit(ptr, 0x0F, 0xBD, dst, src);
+		Emit(buffer, 0x0F, 0xBD, dst, src);
 	} break;
 	case Op_Movsx: {
 		if (srcSize == SIZE_8BIT) {
 			if (dstSize == SIZE_8BIT)
 				return false;
 
-			Emit(ptr, 0x0F, 0xBE, dst, src);
+			Emit(buffer, 0x0F, 0xBE, dst, src);
 		}
 		else if (srcSize == SIZE_16BIT) {
 			if (dstSize < SIZE_32BIT)
 				return false;
 
-			Emit(ptr, 0x0F, 0xBF, dst, src);
+			Emit(buffer, 0x0F, 0xBF, dst, src);
 		}
 		else {
 			return false;
@@ -1421,9 +1417,9 @@ bool Emit(byte** ptr, OpCode opCode, Register dst, Register src) {
 
 		// NOTE: reverse order
 		if (dstSize == SIZE_8BIT) 
-			Emit(ptr, 0x0F, 0xC0, src, dst);
+			Emit(buffer, 0x0F, 0xC0, src, dst);
 		else
-			Emit(ptr, 0x0F, 0xC1, src, dst);
+			Emit(buffer, 0x0F, 0xC1, src, dst);
 	} break;
 	default: {
 		return false;
@@ -1433,10 +1429,10 @@ bool Emit(byte** ptr, OpCode opCode, Register dst, Register src) {
 	return true;
 }
 
-bool Emit(byte** ptr, OpCode opCode, XMM dst, XMM src) {
+bool Emit(BigBuffer* buffer, OpCode opCode, XMM dst, XMM src) {
 	switch (opCode) {
 	case Op_Movss: {
-		EmitMovss(ptr, dst, src);
+		EmitMovss(buffer, dst, src);
 	} break;
 	case Op_Sqrtss :
 	case Op_Rsqrtss:
@@ -1448,7 +1444,7 @@ bool Emit(byte** ptr, OpCode opCode, XMM dst, XMM src) {
 	case Op_Divss  :
 	case Op_Maxss  : {
 		byte op = (byte)(opCode & 15);
-		Emit(ptr, 0x50 | op, dst, src, true);
+		Emit(buffer, 0x50 | op, dst, src, true);
 	} break;
 	case Op_Andps   :
 	case Op_Andnps  :
@@ -1457,41 +1453,41 @@ bool Emit(byte** ptr, OpCode opCode, XMM dst, XMM src) {
 	case Op_Cvtps2pd:
 	case Op_Cvtdq2ps: {
 		byte op = (byte)(opCode & 15);
-		Emit(ptr, 0x50 | op, dst, src, false);
+		Emit(buffer, 0x50 | op, dst, src, false);
 	} break;
 	case Op_Ucomiss:
 	case Op_Comiss: {
 		byte op = (byte)(opCode & 15);
-		Emit(ptr, 0x20 | op, dst, src, false);
+		Emit(buffer, 0x20 | op, dst, src, false);
 	} break;
 	}
 
 	return true;
 }
 
-bool Emit(byte** ptr, OpCode opCode, Register dst, XMM src) {
+bool Emit(BigBuffer* buffer, OpCode opCode, Register dst, XMM src) {
 	if (opCode != Op_Cvttss2si)
 		return false;
 
-	EmitCvttss2si(ptr, dst, src);
+	EmitCvttss2si(buffer, dst, src);
 	return true;
 }
 
-bool Emit(byte** ptr, OpCode opCode, XMM dst, Register src) {
+bool Emit(BigBuffer* buffer, OpCode opCode, XMM dst, Register src) {
 	if (opCode != Op_Cvtsi2ss)
 		return false;
 
-	EmitCvtsi2ss(ptr, dst, src);
+	EmitCvtsi2ss(buffer, dst, src);
 	return true;
 }
 
-bool Emit(byte** ptr, OpCode opCode, Register reg, Memory mem) {
+bool Emit(BigBuffer* buffer, OpCode opCode, Register reg, Memory mem) {
 	switch (opCode) {
 	case Op_Mov: {
-		Emit(ptr, 0x8A, reg, mem);
+		Emit(buffer, 0x8A, reg, mem);
 	} break;
 	case Op_Lea: {
-		Emit(ptr, 0x8C, reg, mem);
+		Emit(buffer, 0x8C, reg, mem);
 	} break;
 	case Op_Add:
 	case Op_Or :
@@ -1503,10 +1499,10 @@ bool Emit(byte** ptr, OpCode opCode, Register reg, Memory mem) {
 	case Op_Cmp: {
 		byte op = (byte)(opCode & 7);
 
-		Emit(ptr, (op<<3) | 2, reg, mem);
+		Emit(buffer, (op<<3) | 2, reg, mem);
 	} break;
 	case Op_Test:{
-		Emit(ptr, 0x84, reg, mem);
+		Emit(buffer, 0x84, reg, mem);
 	} break;
 	case Op_Cmovo :
 	case Op_Cmovno:
@@ -1536,21 +1532,21 @@ bool Emit(byte** ptr, OpCode opCode, Register reg, Memory mem) {
 
 		byte cc = ((byte)(opCode & 0x1E) >> 1);
 		uint16 op = 0x400E | (cc << 8);
-		Emit16(ptr, op, reg, mem);
+		Emit16(buffer, op, reg, mem);
 	} break;
 	case Op_Movzx: {
 		// NOTE: size of mem is missing
 		if ((reg >> 4) != SIZE_16BIT)
 			return false;
 
-		Emit16(ptr, 0xB60E, reg, mem);
+		Emit16(buffer, 0xB60E, reg, mem);
 	} break;
 	case Op_Movsx: {
 		// NOTE: size of mem is missing
 		if ((reg >> 4) != SIZE_16BIT)
 			return false;
 
-		Emit16(ptr, 0xBE0E, reg, mem);
+		Emit16(buffer, 0xBE0E, reg, mem);
 	} break;
 	default: {
 		return false;
@@ -1560,7 +1556,7 @@ bool Emit(byte** ptr, OpCode opCode, Register reg, Memory mem) {
 	return true;
 }
 
-bool Emit(byte** ptr, OpCode opCode, Register reg, byte size, Memory mem) {
+bool Emit(BigBuffer* buffer, OpCode opCode, Register reg, byte size, Memory mem) {
 	byte regSize = reg >> 4;
 
 	switch (opCode) {	
@@ -1569,13 +1565,13 @@ bool Emit(byte** ptr, OpCode opCode, Register reg, byte size, Memory mem) {
 			if (regSize == SIZE_8BIT)
 				return false;
 
-			Emit16(ptr, 0xB60E, reg, mem);
+			Emit16(buffer, 0xB60E, reg, mem);
 		}
 		else if (size == SIZE_16BIT) {
 			if (regSize <= SIZE_16BIT)
 				return false;
 
-			Emit16(ptr, 0xB70E, reg, mem);
+			Emit16(buffer, 0xB70E, reg, mem);
 		}
 		else {
 			return false;
@@ -1586,38 +1582,38 @@ bool Emit(byte** ptr, OpCode opCode, Register reg, byte size, Memory mem) {
 			if (regSize == SIZE_8BIT)
 				return false;
 
-			Emit16(ptr, 0xBE0E, reg, mem);
+			Emit16(buffer, 0xBE0E, reg, mem);
 		}
 		else if (size == SIZE_16BIT) {
 			if (regSize <= SIZE_16BIT)
 				return false;
 
-			Emit16(ptr, 0xBF0E, reg, mem);
+			Emit16(buffer, 0xBF0E, reg, mem);
 		}
 		else {
 			return false;
 		}
 	} break;
 	default: {
-		return Emit(ptr, opCode, reg, mem);
+		return Emit(buffer, opCode, reg, mem);
 	} break;
 	}
 
 	return true;
 }
 
-bool Emit(byte** ptr, OpCode opCode, XMM xmm, Memory mem) {
+bool Emit(BigBuffer* buffer, OpCode opCode, XMM xmm, Memory mem) {
 	if (opCode != Op_Movss)
 		return false;
 
-	EmitMovss(ptr, xmm, mem);
+	EmitMovss(buffer, xmm, mem);
 	return true;
 }
 
-bool Emit(byte** ptr, OpCode opCode, byte size, Memory mem, Immediate imm) {
+bool Emit(BigBuffer* buffer, OpCode opCode, byte size, Memory mem, Immediate imm) {
 	switch (opCode) {
 	case Op_Mov: {
-		Emit(ptr, 0xC6, size, mem, imm);
+		Emit(buffer, 0xC6, size, mem, imm);
 	} break;
 	case Op_Add:
 	case Op_Or :
@@ -1629,10 +1625,10 @@ bool Emit(byte** ptr, OpCode opCode, byte size, Memory mem, Immediate imm) {
 	case Op_Cmp: {
 		byte op = (byte)(opCode & 7);
 
-		Emit_80(ptr, op, size, mem, imm);
+		Emit_80(buffer, op, size, mem, imm);
 	} break;
 	case Op_Test: {
-		Emit(ptr, 0xF6, size, mem, imm);
+		Emit(buffer, 0xF6, size, mem, imm);
 	} break;
 	case Op_Rol:
 	case Op_Ror:
@@ -1642,7 +1638,7 @@ bool Emit(byte** ptr, OpCode opCode, byte size, Memory mem, Immediate imm) {
 	case Op_Shr:
 	case Op_Sar: {
 		byte op = (byte)(opCode & 7);
-		Emit_C0(ptr, op, size, mem, imm);
+		Emit_C0(buffer, op, size, mem, imm);
 	} break;
 	default: {
 		return false;
@@ -1652,10 +1648,10 @@ bool Emit(byte** ptr, OpCode opCode, byte size, Memory mem, Immediate imm) {
 	return true;
 }
 
-bool Emit(byte** ptr, OpCode opCode, Memory mem, Register reg) {
+bool Emit(BigBuffer* buffer, OpCode opCode, Memory mem, Register reg) {
 	switch (opCode) {
 	case Op_Mov: {
-		Emit(ptr, 0x88, mem, reg);
+		Emit(buffer, 0x88, mem, reg);
 	} break;
 	case Op_Add:
 	case Op_Or :
@@ -1667,10 +1663,10 @@ bool Emit(byte** ptr, OpCode opCode, Memory mem, Register reg) {
 	case Op_Cmp: {
 		byte op = (byte)(opCode & 7);
 
-		Emit(ptr, op << 3, mem, reg);
+		Emit(buffer, op << 3, mem, reg);
 	} break;
 	case Op_Test: {
-		Emit(ptr, 0x84, mem, reg);
+		Emit(buffer, 0x84, mem, reg);
 	} break;
 	default: {
 		return false;
@@ -1680,23 +1676,23 @@ bool Emit(byte** ptr, OpCode opCode, Memory mem, Register reg) {
 	return true;
 }
 
-bool Emit(byte** ptr, OpCode opCode, Memory mem, XMM xmm) {
+bool Emit(BigBuffer* buffer, OpCode opCode, Memory mem, XMM xmm) {
 	if (opCode != Op_Movss)
 		return false;
 
-	EmitMovss(ptr, mem, xmm);
+	EmitMovss(buffer, mem, xmm);
 	return true;
 }
 
-bool Emit(byte** ptr, OpCode opCode, Register dst, Register src, Immediate imm) {
+bool Emit(BigBuffer* buffer, OpCode opCode, Register dst, Register src, Immediate imm) {
 	switch (opCode) {
 	case Op_Imul: {
 		byte imm_size = GetSignedSize(imm);
 		if (imm_size == SIZE_8BIT) {
-			Emit(ptr, 0x6A, dst, src, imm);
+			Emit(buffer, 0x6A, dst, src, imm);
 		}
 		else {
-			Emit(ptr, 0x68, dst, src, imm);
+			Emit(buffer, 0x68, dst, src, imm);
 		}
 	} break;
 	default: {
@@ -1707,11 +1703,11 @@ bool Emit(byte** ptr, OpCode opCode, Register dst, Register src, Immediate imm) 
 	return true;
 }
 
-bool Emit(byte** ptr, OpCode opCode, XMM dst, XMM src, Immediate imm) {
+bool Emit(BigBuffer* buffer, OpCode opCode, XMM dst, XMM src, Immediate imm) {
 	if (opCode != Op_Roundss)
 		return false;
 
-	EmitRoundss(ptr, dst, src, imm);
+	EmitRoundss(buffer, dst, src, imm);
 	return true;
 }
 
@@ -1719,6 +1715,20 @@ struct ImportedFunction {
 	String library;
 	String name;
 	int32 hint;
+};
+
+struct Instruction {
+	int32 index;
+};
+
+struct StaticValue {
+	int32 segment;
+	int32 id;
+};
+
+struct MemoryAddress {
+	int32 segment;
+	int32 id;
 };
 
 struct Operand {
@@ -1729,7 +1739,9 @@ struct Operand {
 		Immediate imm;
 		Memory mem;
 		ImportedFunction func;
-		int32 index; // for static values and for local functions
+		StaticValue static_value;
+		MemoryAddress mem_addr;
+		Instruction instruction;
 		int32* ptr;  // for indirect index
 	};
 };
@@ -1751,30 +1763,30 @@ void ConvertPJumptTargetToJumpTarget(Operation* op) {
 	if (op->operands[0].type == Od_PJumpTarget) {
 		int32 index = *op->operands[0].ptr;
 		op->operands[0].type = Od_JumpTarget;
-		op->operands[0].index = index;
+		op->operands[0].instruction.index = index;
 	}
 }
 
-bool EmitOperation(byte** ptr, Operation* op) {
+bool EmitOperation(BigBuffer* buffer, Operation* op) {
 	if (op->operandCount == 0) {
-		return Emit(ptr, op->opCode);
+		return Emit(buffer, op->opCode);
 	}
 	else if (op->operandCount == 1) {
 		Operand operand = op->operands[0];
 		if (operand.type == Od_Immediate) {
-			return Emit(ptr, op->opCode, operand.imm);
+			return Emit(buffer, op->opCode, operand.imm);
 		}
 		else if (operand.type == Od_Register) {
-			return Emit(ptr, op->opCode, operand.reg);
+			return Emit(buffer, op->opCode, operand.reg);
 		}
 		else if (operand.type == Od_Memory) {
-			return Emit(ptr, op->opCode, op->size, operand.mem);
+			return Emit(buffer, op->opCode, op->size, operand.mem);
 		}
 		else if (operand.type == Od_ImportedFunction ||
 			operand.type == Od_JumpTarget) {
 			Immediate imm = {};
-			if (Emit(ptr, op->opCode, imm)) {
-				op->offset = (int32*)(*ptr - 4);
+			if (Emit(buffer, op->opCode, imm)) {
+				op->offset = (int32*)(buffer->pos - 4);
 				return true;
 			}
 
@@ -1783,8 +1795,8 @@ bool EmitOperation(byte** ptr, Operation* op) {
 		else if (operand.type == Od_PJumpTarget) {
 			ConvertPJumptTargetToJumpTarget(op);
 			Immediate imm = {};
-			if (Emit(ptr, op->opCode, imm)) {
-				op->offset = (int32*)(*ptr - 4);
+			if (Emit(buffer, op->opCode, imm)) {
+				op->offset = (int32*)(buffer->pos - 4);
 				return true;
 			}
 
@@ -1799,22 +1811,22 @@ bool EmitOperation(byte** ptr, Operation* op) {
 
 		if (dst.type == Od_Register) {
 			if (src.type == Od_Immediate) {
-				return Emit(ptr, op->opCode, dst.reg, src.imm);
+				return Emit(buffer, op->opCode, dst.reg, src.imm);
 			}
 			else if (src.type == Od_Register) {
-				return Emit(ptr, op->opCode, dst.reg, src.reg);
+				return Emit(buffer, op->opCode, dst.reg, src.reg);
 			}
 			else if (src.type == Od_Memory) {
 				// NOTE: size is usually ignored, but used for move with extension
-				return Emit(ptr, op->opCode, dst.reg, op->size, src.mem);
+				return Emit(buffer, op->opCode, dst.reg, op->size, src.mem);
 			}
 			else if (src.type == Od_Xmm) {
-				return Emit(ptr, op->opCode, dst.reg, src.xmm);
+				return Emit(buffer, op->opCode, dst.reg, src.xmm);
 			}
 			else if (src.type == Od_StaticValue) {
 				Memory mem = {Mem_RelativeToCurrent};
-				if (Emit(ptr, op->opCode, dst.reg, mem)) {
-					op->offset = (int32*)(*ptr - 4);
+				if (Emit(buffer, op->opCode, dst.reg, mem)) {
+					op->offset = (int32*)(buffer->pos - 4);
 					return true;
 				}
 
@@ -1826,8 +1838,8 @@ bool EmitOperation(byte** ptr, Operation* op) {
 
 				Immediate imm = {};
 				imm.u = 0x123456789; // force 64 bit size
-				if (Emit(ptr, op->opCode, dst.reg, imm)) {
-					op->mem_address = (uint64*)(*ptr - 8);
+				if (Emit(buffer, op->opCode, dst.reg, imm)) {
+					op->mem_address = (uint64*)(buffer->pos - 8);
 					return true;
 				}
 
@@ -1838,31 +1850,31 @@ bool EmitOperation(byte** ptr, Operation* op) {
 		}
 		else if (dst.type == Od_Memory) {
 			if (src.type == Od_Immediate) {
-				return Emit(ptr, op->opCode, op->size, dst.mem, src.imm);
+				return Emit(buffer, op->opCode, op->size, dst.mem, src.imm);
 			}
 			else if (src.type == Od_Register) {
-				return Emit(ptr, op->opCode, dst.mem, src.reg);
+				return Emit(buffer, op->opCode, dst.mem, src.reg);
 			}
 			else if (src.type == Od_Xmm) {
-				return Emit(ptr, op->opCode, dst.mem, src.xmm);
+				return Emit(buffer, op->opCode, dst.mem, src.xmm);
 			}
 			
 			return false;
 		}
 		else if (dst.type == Od_Xmm) {
 			if (src.type == Od_Xmm) {
-				return Emit(ptr, op->opCode, dst.xmm, src.xmm);
+				return Emit(buffer, op->opCode, dst.xmm, src.xmm);
 			}
 			else if (src.type == Od_Register) {
-				return Emit(ptr, op->opCode, dst.xmm, src.reg);
+				return Emit(buffer, op->opCode, dst.xmm, src.reg);
 			}
 			else if (src.type == Od_Memory) {
-				return Emit(ptr, op->opCode, dst.xmm, src.mem);
+				return Emit(buffer, op->opCode, dst.xmm, src.mem);
 			}
 			else if (src.type == Od_StaticValue) {
 				Memory mem = {Mem_RelativeToCurrent};
-				if (Emit(ptr, op->opCode, dst.xmm, mem)) {
-					op->offset = (int32*)(*ptr - 4);
+				if (Emit(buffer, op->opCode, dst.xmm, mem)) {
+					op->offset = (int32*)(buffer->pos - 4);
 					return true;
 				}
 
@@ -1883,10 +1895,10 @@ bool EmitOperation(byte** ptr, Operation* op) {
 		Immediate imm = op->operands[2].imm;
 
 		if (dst.type == Od_Register && src.type == Od_Register) {
-			return Emit(ptr, op->opCode, dst.reg, src.reg, imm);
+			return Emit(buffer, op->opCode, dst.reg, src.reg, imm);
 		}
 		else if (dst.type == Od_Xmm && src.type == Od_Xmm) {
-			return Emit(ptr, op->opCode, dst.xmm, src.xmm, imm);
+			return Emit(buffer, op->opCode, dst.xmm, src.xmm, imm);
 		}
 		
 		return false;
@@ -2108,14 +2120,6 @@ Operation CreateOperation(OpCode opCode, Memory mem, XMM xmm) {
 	return op;
 }
 
-struct StaticValue {
-	int32 id;
-};
-
-struct MemoryAddress {
-	int32 id;
-};
-
 Operation CreateOperation(OpCode opCode, Register reg, StaticValue value) {
 	Operation op = {};
 	op.opCode = opCode;
@@ -2123,7 +2127,7 @@ Operation CreateOperation(OpCode opCode, Register reg, StaticValue value) {
 	op.operands[0].type = Od_Register;
 	op.operands[0].reg = reg;
 	op.operands[1].type = Od_StaticValue;
-	op.operands[1].index = value.id;
+	op.operands[1].static_value = value;
 
 	return op;
 }
@@ -2135,7 +2139,7 @@ Operation CreateOperation(OpCode opCode, XMM xmm, StaticValue value) {
 	op.operands[0].type = Od_Xmm;
 	op.operands[0].xmm = xmm;
 	op.operands[1].type = Od_StaticValue;
-	op.operands[1].index = value.id;
+	op.operands[1].static_value = value;
 
 	return op;
 }
@@ -2147,7 +2151,7 @@ Operation CreateOperation(OpCode opCode, Register reg, MemoryAddress value) {
 	op.operands[0].type = Od_Register;
 	op.operands[0].reg = reg;
 	op.operands[1].type = Od_MemoryAddress;
-	op.operands[1].index = value.id;
+	op.operands[1].mem_addr = value;
 
 	return op;
 }
@@ -2190,16 +2194,12 @@ Operation CreateOperation(OpCode opCode, Memory mem) {
 	return op;
 }
 
-struct Instruction {
-	int32 index;
-};
-
 Operation CreateOperation(OpCode opCode, Instruction instruction) {
 	Operation op = {};
 	op.opCode = opCode;
 	op.operandCount = 1;
 	op.operands[0].type = Od_JumpTarget;
-	op.operands[0].index = instruction.index;
+	op.operands[0].instruction = instruction;
 
 	return op;
 }
