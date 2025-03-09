@@ -1782,8 +1782,18 @@ bool EmitOperation(BigBuffer* buffer, Operation* op) {
 		else if (operand.type == Od_Memory) {
 			return Emit(buffer, op->opCode, op->size, operand.mem);
 		}
-		else if (operand.type == Od_ImportedFunction ||
-			operand.type == Od_JumpTarget) {
+		else if (operand.type == Od_ImportedFunction) {
+			if (op->opCode == Op_Call) {
+				Emit(buffer, 0xFF);
+				Emit(buffer, 0x15);
+				op->offset = (int32*)buffer->pos;
+				buffer->pos += 4;
+				return true;
+			}
+
+			return false;
+		}
+		else if (operand.type == Od_JumpTarget) {
 			Immediate imm = {};
 			if (Emit(buffer, op->opCode, imm)) {
 				op->offset = (int32*)(buffer->pos - 4);

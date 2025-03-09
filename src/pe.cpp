@@ -15,7 +15,6 @@ struct DllSymbolNode {
 		CallNode* last;
 	} calls;
 
-	int32* jump;
 	uint64* iat;
 	uint64* ilt;
 
@@ -29,12 +28,16 @@ struct SymbolList {
 	int32 count;
 };
 
-uint64 GetRVA(byte* offset, byte* baseOffset, uint64 rvBaseOffset) {
-	return offset - baseOffset + rvBaseOffset;
+uint64 GetRVA(byte* offset, byte* bufferStart, int32 sectionOffset, uint64 rvBaseOffset) {
+	return offset - (bufferStart + sectionOffset) + rvBaseOffset;
 }
 
-uint64 GetVA(byte* offset, byte* baseOffset, uint64 rvBaseOffset) {
-	return GetRVA(offset, baseOffset, rvBaseOffset) + 0x000140000000;
+uint64 GetRVA(BigBuffer* buffer, int32 sectionOffset, uint64 rvBaseOffset) {
+	return buffer->pos - (buffer->start + sectionOffset) + rvBaseOffset;
+}
+
+uint64 GetVA(BigBuffer* buffer, int32 sectionOffset, uint64 rvBaseOffset) {
+	return GetRVA(buffer, sectionOffset, rvBaseOffset) + 0x000140000000;
 }
 
 bool Link(Operation* ops, int32 opCount, 
@@ -156,7 +159,7 @@ bool Link(Operation* ops, int32 opCount,
 	// emit instructions
 	for (int32 i = 0; i < opCount; i++) {
 		Operation* op = ops + i;
-		op->address = (int32)GetRVA(buffer.pos, buffer.start + 0x200, 0x1000);
+		op->address = (int32)GetRVA(&buffer, 0x200, 0x1000);
 		if (!EmitOperation(&buffer, op)) {
 			success = false;
 			goto clean;
@@ -206,15 +209,6 @@ bool Link(Operation* ops, int32 opCount,
 		}
 	}
 
-	// emit jumps for each imported call and fill in relative calls
-	LINKEDLIST_FOREACH(&importedList, DllSymbolNode, imported) {
-		LINKEDLIST_FOREACH(&imported->calls, CallNode, call) {
-			int32* ref = call->value;;
-			*ref = (int32)(buffer.pos - (byte*)ref - 4);
-		}
-		imported->jump = EmitIndirectJmp(&buffer);
-	}
-
 	// end of code, fill in virtual size of code section...
 	virtualSize = (int32)(buffer.pos - (buffer.start + 0x200));
 	codeSection->Misc.VirtualSize = virtualSize;
@@ -234,11 +228,13 @@ bool Link(Operation* ops, int32 opCount,
 
 	// IAT Directory
 	headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IAT].VirtualAddress 
-		= (DWORD)GetRVA(buffer.pos, buffer.start + sectionOffset, 0x2000);
+		= (DWORD)GetRVA(&buffer, sectionOffset, 0x2000);
 
 	LINKEDLIST_FOREACH(&importedList, DllSymbolNode, import) {
 		import->iat = (uint64*)buffer.pos;
-		*import->jump = (int32)(GetRVA(buffer.pos, buffer.start + sectionOffset, 0x2000) - (GetRVA((byte*)import->jump, buffer.start + 0x200, 0x1000) + 4));
+		LINKEDLIST_FOREACH(&import->calls, CallNode, call) {
+			*call->value = (int32)(GetRVA(&buffer, sectionOffset, 0x2000) - (GetRVA((byte*)call->value, buffer.start, 0x200, 0x1000) + 4));
+		}
 		buffer.pos += 8;
 	}
 	Emit64(&buffer, 0);
@@ -250,7 +246,7 @@ bool Link(Operation* ops, int32 opCount,
 	// emit read-only data, fill in absolute-address refrences
 	mem_addresses = (uint64*)ArenaAlloc(&arena, roCount * 8);
 	for (int32 i = 0; i < roCount; i++) {
-		uint64 va = GetVA(buffer.pos, buffer.start + sectionOffset, 0x2000);
+		uint64 va = GetVA(&buffer, sectionOffset, 0x2000);
 		mem_addresses[i] = va;
 		BigBufferWrite(&buffer, rodata_values[i]);
 	}
@@ -273,12 +269,12 @@ bool Link(Operation* ops, int32 opCount,
 
 	// Import Directory
 	headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].VirtualAddress 
-		= (DWORD)GetRVA((byte*)import_desc, buffer.start + sectionOffset, 0x2000);
+		= (DWORD)GetRVA((byte*)import_desc, buffer.start, sectionOffset, 0x2000);
 	headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT].Size 
 		= 2*sizeof(IMAGE_IMPORT_DESCRIPTOR);
 
 	// fill in import descriptor first thunk
-	import_desc->OriginalFirstThunk = (DWORD)GetRVA(buffer.pos, buffer.start + sectionOffset, 0x2000);
+	import_desc->OriginalFirstThunk = (DWORD)GetRVA(&buffer, sectionOffset, 0x2000);
 
 	// skip and store offsets of ilt to be filled in
 	LINKEDLIST_FOREACH(&importedList, DllSymbolNode, import) {
@@ -289,7 +285,7 @@ bool Link(Operation* ops, int32 opCount,
 
 	// emit names and hints of imported function, fill in both ilt and iat with the relative address
 	LINKEDLIST_FOREACH(&importedList, DllSymbolNode, import) {
-		*import->ilt = GetRVA(buffer.pos, buffer.start + sectionOffset, 0x2000);
+		*import->ilt = GetRVA(&buffer, sectionOffset, 0x2000);
 		*import->iat = *import->ilt;
 		Emit16(&buffer, import->hint);
 		BigBufferWrite(&buffer, import->name);
@@ -298,7 +294,7 @@ bool Link(Operation* ops, int32 opCount,
 	}
 
 	// fill in relative address to library name
-	import_desc->Name = (DWORD)GetRVA(buffer.pos, buffer.start + sectionOffset, 0x2000);
+	import_desc->Name = (DWORD)GetRVA(&buffer, sectionOffset, 0x2000);
 	BigBufferWrite(&buffer, kernel);
 	Emit(&buffer, 0);
 	Emit(&buffer, 0);
@@ -322,7 +318,7 @@ bool Link(Operation* ops, int32 opCount,
 
 		mem_addresses = (uint64*)ArenaAlloc(&arena, rwCount * 8);
 		for (int32 i = 0; i < rwCount; i++) {
-			uint64 va = GetVA(buffer.pos, buffer.start + sectionOffset, 0x3000);
+			uint64 va = GetVA(&buffer, sectionOffset, 0x3000);
 			mem_addresses[i] = va;
 			BigBufferWrite(&buffer, rwdata_values[i]);
 		}
