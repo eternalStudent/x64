@@ -372,7 +372,6 @@ void Emit(BigBuffer* buffer, byte op1, byte op2, byte size, Memory mem) {
 	EmitDisplacement(buffer, mem);
 }
 
-// used by test
 void Emit(BigBuffer* buffer, byte op, Register _register, Immediate imm) {
 	byte size = (_register & 0xF0) >> 4;
 	byte reg = _register & 0x0F;
@@ -442,7 +441,7 @@ void Emit(BigBuffer* buffer, byte op1, byte op2, Register dst, Register src) {
 	EmitModRegRM(buffer, 3, reg2, reg1);
 }
 
-void Emit(BigBuffer* buffer, byte op1, byte op2, byte op3, Register dst, Register src) {
+void EmitPopcnt(BigBuffer* buffer, Register dst, Register src) {
 	byte size = dst >> 4;
 	byte reg2 = dst & 0x0F;
 	byte reg1 = src & 0x0F;
@@ -451,15 +450,15 @@ void Emit(BigBuffer* buffer, byte op1, byte op2, byte op3, Register dst, Registe
 		Emit(buffer, 0x66);
 	}
 
-	if (size == SIZE_64BIT || reg1 > 7 || reg2 > 7) {
+	Emit(buffer, 0xF3);
+
+	if (size == SIZE_64BIT || reg2 > 7 || reg1 > 7) {
 		byte w = size == SIZE_64BIT ? 1 : 0;
-		byte b = (reg1 & 8) >> 3;
+		byte b = (reg2 & 8) >> 3;
 		EmitRexPrefix(buffer, w, reg2, 0, b);
 	}
 
-	Emit(buffer, op1);
-	Emit(buffer, op2);
-	Emit(buffer, op3);
+	Emit16(buffer, 0xB80F);
 	EmitModRegRM(buffer, 3, reg2, reg1);
 }
 
@@ -964,6 +963,10 @@ enum OpCode : int32 {
 	Op_Pop,
 	Op_Test,
 
+	Op_Bt,
+	Op_Shld,
+	Op_Bts,
+	Op_Shrd,
 	Op_Cmpxchg,
 	Op_Btr,
 	Op_Movzx,
@@ -1329,6 +1332,50 @@ bool Emit(BigBuffer* buffer, OpCode opCode, Register dst, Register src) {
 		Emit(buffer, 0x0F, 0x40 | cc, dst, src);
 	} break;
 
+	case Op_Bt: {
+		if (dstSize != srcSize || dstSize == SIZE_8BIT)
+			return false;
+
+		if (dstSize == SIZE_8BIT)
+			return false;
+
+		// NOTE: reverse order
+		Emit(buffer, 0x0F, 0xA3, src, dst);
+	} break;
+
+	case Op_Shld: {
+		if (dstSize != srcSize || dstSize == SIZE_8BIT)
+			return false;
+
+		if (dstSize == SIZE_8BIT)
+			return false;
+
+		// NOTE: reverse order
+		Emit(buffer, 0x0F, 0xA5, src, dst);
+	} break;
+
+	case Op_Bts: {
+		if (dstSize != srcSize || dstSize == SIZE_8BIT)
+			return false;
+
+		if (dstSize == SIZE_8BIT)
+			return false;
+
+		// NOTE: reverse order
+		Emit(buffer, 0x0F, 0xAB, src, dst);
+	} break;
+
+	case Op_Shrd: {
+		if (dstSize != srcSize || dstSize == SIZE_8BIT)
+			return false;
+
+		if (dstSize == SIZE_8BIT)
+			return false;
+
+		// NOTE: reverse order
+		Emit(buffer, 0x0F, 0xAD, src, dst);
+	} break;
+
 	case Op_Imul: {
 		if (dstSize != srcSize || dstSize == SIZE_8BIT)
 			return false;
@@ -1373,7 +1420,7 @@ bool Emit(BigBuffer* buffer, OpCode opCode, Register dst, Register src) {
 		if (dstSize != srcSize || dstSize == SIZE_8BIT)
 			return false;
 
-		Emit(buffer, 0xF3, 0x0F, 0xB8, dst, src);
+		EmitPopcnt(buffer, dst, src);
 	} break;
 	case Op_Btc: {
 		if (dstSize != srcSize || dstSize == SIZE_8BIT)
@@ -1897,18 +1944,26 @@ bool EmitOperation(BigBuffer* buffer, Operation* op) {
 		return false;
 	}
 	else if (op->operandCount == 3) {
-		if (op->operands[2].type != Od_Immediate)
-			return false;
+		if (op->operands[2].type == Od_Register && op->operands[2].reg == REG_CL) {
+			Operand dst = op->operands[0];
+			Operand src = op->operands[1];
 
-		Operand dst = op->operands[0];
-		Operand src = op->operands[1];
-		Immediate imm = op->operands[2].imm;
-
-		if (dst.type == Od_Register && src.type == Od_Register) {
-			return Emit(buffer, op->opCode, dst.reg, src.reg, imm);
+			return Emit(buffer, op->opCode, dst.reg, src.reg);
 		}
-		else if (dst.type == Od_Xmm && src.type == Od_Xmm) {
-			return Emit(buffer, op->opCode, dst.xmm, src.xmm, imm);
+		else if (op->operands[2].type == Od_Immediate) {
+	
+			Operand dst = op->operands[0];
+			Operand src = op->operands[1];
+			Immediate imm = op->operands[2].imm;
+
+			if (dst.type == Od_Register && src.type == Od_Register) {
+				return Emit(buffer, op->opCode, dst.reg, src.reg, imm);
+			}
+			else if (dst.type == Od_Xmm && src.type == Od_Xmm) {
+				return Emit(buffer, op->opCode, dst.xmm, src.xmm, imm);
+			}
+		
+			return false;
 		}
 		
 		return false;
