@@ -828,12 +828,9 @@ void EmitCvtsi2ss(BigBuffer* buffer, XMM dst, Register src) {
 	EmitModRegRM(buffer, 3, reg1, reg2);
 }
 
-void Emit(BigBuffer* buffer, byte op, XMM dst, XMM src, bool prefix) {
+void Emit(BigBuffer* buffer, byte op, XMM dst, XMM src) {
 	byte reg1 = dst & 0x0F;
 	byte reg2 = src & 0x0F;
-
-	if (prefix)
-		Emit(buffer, 0xF3);
 
 	if (reg1 > 7 || reg2 > 7) {
 		byte b = (reg2 & 8) >> 3;
@@ -845,69 +842,72 @@ void Emit(BigBuffer* buffer, byte op, XMM dst, XMM src, bool prefix) {
 	EmitModRegRM(buffer, 3, reg1, reg2);
 }
 
-void EmitMovss(BigBuffer* buffer, XMM dst, XMM src) {
+void Emit(BigBuffer* buffer, byte prefix, byte op, XMM dst, XMM src) {
 	byte reg1 = dst & 0x0F;
 	byte reg2 = src & 0x0F;
 
-	Emit(buffer, 0xF3);
+	Emit(buffer, prefix);
 
 	if (reg1 > 7 || reg2 > 7) {
 		byte b = (reg2 & 8) >> 3;
 		EmitRexPrefix(buffer, 0, reg1, 0, b);
 	}
 
-	Emit16(buffer, 0x100F);
+	Emit(buffer, 0x0F);
+	Emit(buffer, op);
 	EmitModRegRM(buffer, 3, reg1, reg2);
 }
 
-void EmitMovss(BigBuffer* buffer, XMM xmm, Memory mem) {
+void Emit(BigBuffer* buffer, byte prefix, byte op, XMM xmm, Memory mem) {
 	byte reg = xmm & 0x0F;
 
 	if (mem.regSize == SIZE_32BIT) {
 		Emit(buffer, 0x67);
 	}
 
-	Emit(buffer, 0xF3);
+	Emit(buffer, prefix);
 
 	if (reg > 7 || mem.base > 7 || mem.index > 7) {
 		byte b = (mem.base & 8) >> 3;
 		EmitRexPrefix(buffer, 0, reg, mem.index, b);
 	}
 
-	Emit16(buffer, 0x100F);
+	Emit(buffer, 0x0F);
+	Emit(buffer, op);
 
 	EmitModRegRM(buffer, reg, mem);
 	EmitSIB(buffer, mem);
 	EmitDisplacement(buffer, mem);
 }
 
-void EmitMovss(BigBuffer* buffer, Memory mem, XMM xmm) {
+void Emit(BigBuffer* buffer, byte prefix, byte op, Memory mem, XMM xmm) {
 	byte reg = xmm & 0x0F;
 
 	if (mem.regSize == SIZE_32BIT) {
 		Emit(buffer, 0x67);
 	}
 
-	Emit(buffer, 0xF3);
+	Emit(buffer, prefix);
 
 	if (reg > 7 || mem.base > 7 || mem.index > 7) {
 		byte b = (mem.base & 8) >> 3;
 		EmitRexPrefix(buffer, 0, reg, mem.index, b);
 	}
 
-	Emit16(buffer, 0x110F);
+	Emit(buffer, 0x0F);
+	Emit(buffer, op);
 
 	EmitModRegRM(buffer, reg, mem);
 	EmitSIB(buffer, mem);
 	EmitDisplacement(buffer, mem);
 }
 
-void EmitCvttss2si(BigBuffer* buffer, Register dst, XMM src) {
+void Emit(BigBuffer* buffer, byte prefix, byte op, Register dst, XMM src) {
 	byte size = dst >> 4;
 	byte reg1 = dst & 0x0F;
 	byte reg2 = src & 0x0F;
 
-	Emit(buffer, 0xF3);
+	Emit(buffer, prefix);
 
 	if (size == SIZE_64BIT || reg1 > 7 || reg2 > 7) {
 		byte w = size == SIZE_64BIT ? 1 : 0;
@@ -915,7 +915,8 @@ void EmitCvttss2si(BigBuffer* buffer, Register dst, XMM src) {
 		EmitRexPrefix(buffer, w, reg1, 0, b);
 	}
 
-	Emit16(buffer, 0x2C0F);
+	Emit(buffer, 0x0F);
+	Emit(buffer, op);
 	EmitModRegRM(buffer, 3, reg1, reg2);
 }
 
@@ -1077,9 +1078,21 @@ enum OpCode : int32 {
 	Op_Cmovg       = 0x800 | (15 << 1),
 
 	Op_Movss,
+	Op_Movsd,
 	Op_Roundss,
 	Op_Cvttss2si,
 	Op_Cvtsi2ss,
+	Op_Movd,
+	Op_Movq,
+
+	Op_Sqrtsd		= 0x901,
+	Op_Addsd		= 0x908,
+	Op_Mulsd		= 0x909,
+	Op_Cvtsd2ss		= 0x90A,
+	Op_Subsd		= 0x90C,
+	Op_Minsd		= 0x90D,
+	Op_Divsd		= 0x90E,
+	Op_Maxsd		= 0x90F,
 };
 
 bool Emit(BigBuffer* buffer, OpCode opCode) {
@@ -1479,7 +1492,10 @@ bool Emit(BigBuffer* buffer, OpCode opCode, Register dst, Register src) {
 bool Emit(BigBuffer* buffer, OpCode opCode, XMM dst, XMM src) {
 	switch (opCode) {
 	case Op_Movss: {
-		EmitMovss(buffer, dst, src);
+		Emit(buffer, 0xF3, 0x10, dst, src);
+	} break;
+	case Op_Movsd: {
+		Emit(buffer, 0xF2, 0x10, dst, src);
 	} break;
 	case Op_Sqrtss :
 	case Op_Rsqrtss:
@@ -1491,7 +1507,7 @@ bool Emit(BigBuffer* buffer, OpCode opCode, XMM dst, XMM src) {
 	case Op_Divss  :
 	case Op_Maxss  : {
 		byte op = (byte)(opCode & 15);
-		Emit(buffer, 0x50 | op, dst, src, true);
+		Emit(buffer, 0xF3, 0x50 | op, dst, src);
 	} break;
 	case Op_Andps   :
 	case Op_Andnps  :
@@ -1500,12 +1516,28 @@ bool Emit(BigBuffer* buffer, OpCode opCode, XMM dst, XMM src) {
 	case Op_Cvtps2pd:
 	case Op_Cvtdq2ps: {
 		byte op = (byte)(opCode & 15);
-		Emit(buffer, 0x50 | op, dst, src, false);
+		Emit(buffer, 0x50 | op, dst, src);
 	} break;
 	case Op_Ucomiss:
 	case Op_Comiss: {
 		byte op = (byte)(opCode & 15);
-		Emit(buffer, 0x20 | op, dst, src, false);
+		Emit(buffer, 0x20 | op, dst, src);
+	} break;
+
+	case Op_Sqrtsd :
+	case Op_Addsd :
+	case Op_Mulsd :
+	case Op_Cvtsd2ss :
+	case Op_Subsd :
+	case Op_Minsd :
+	case Op_Divsd :
+	case Op_Maxsd : {
+		byte op = (byte)(opCode & 15);
+		Emit(buffer, 0xF2, 0x50 | op, dst, src);
+	} break;
+
+	default: {
+		return false;
 	} break;
 	}
 
@@ -1513,10 +1545,28 @@ bool Emit(BigBuffer* buffer, OpCode opCode, XMM dst, XMM src) {
 }
 
 bool Emit(BigBuffer* buffer, OpCode opCode, Register dst, XMM src) {
-	if (opCode != Op_Cvttss2si)
-		return false;
+	byte size = dst >> 4;
+	switch(opCode) {
+	case Op_Cvttss2si: {
+		Emit(buffer, 0xF3, 0x2C, dst, src);
+	} break;
+	case Op_Movd: {
+		if (size != SIZE_32BIT)
+			return false;
 
-	EmitCvttss2si(buffer, dst, src);
+		Emit(buffer, 0x66, 0x7E, dst, src);
+	} break;
+	case Op_Movq: {
+		if (size != SIZE_64BIT)
+			return false;
+		
+		Emit(buffer, 0x66, 0x7E, dst, src);
+	} break;
+	default: {
+		return false;
+	} break;
+	}
+	
 	return true;
 }
 
@@ -1650,10 +1700,18 @@ bool Emit(BigBuffer* buffer, OpCode opCode, Register reg, byte size, Memory mem)
 }
 
 bool Emit(BigBuffer* buffer, OpCode opCode, XMM xmm, Memory mem) {
-	if (opCode != Op_Movss)
+	switch (opCode) {
+	case Op_Movss: {
+		Emit(buffer, 0xF3, 0x10, xmm, mem);
+	} break;
+	case Op_Movsd: {
+		Emit(buffer, 0xF2, 0x10, xmm, mem);
+	} break;
+	default: {
 		return false;
+	} break;
+	}
 
-	EmitMovss(buffer, xmm, mem);
 	return true;
 }
 
@@ -1724,10 +1782,18 @@ bool Emit(BigBuffer* buffer, OpCode opCode, Memory mem, Register reg) {
 }
 
 bool Emit(BigBuffer* buffer, OpCode opCode, Memory mem, XMM xmm) {
-	if (opCode != Op_Movss)
+	switch (opCode) {
+	case Op_Movss: {
+		Emit(buffer, 0xF3, 0x11, mem, xmm);
+	} break;
+	case Op_Movsd: {
+		Emit(buffer, 0xF2, 0x11, mem, xmm);
+	} break;
+	default: {
 		return false;
+	} break;
+	}
 
-	EmitMovss(buffer, mem, xmm);
 	return true;
 }
 
