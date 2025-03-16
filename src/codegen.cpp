@@ -920,6 +920,24 @@ void Emit(BigBuffer* buffer, byte prefix, byte op, Register dst, XMM src) {
 	EmitModRegRM(buffer, 3, reg1, reg2);
 }
 
+void Emit_(BigBuffer* buffer, byte prefix, byte op, Register dst, XMM src) {
+	byte size = dst >> 4;
+	byte reg2 = dst & 0x0F;
+	byte reg1 = src & 0x0F;
+
+	Emit(buffer, prefix);
+
+	if (size == SIZE_64BIT || reg1 > 7 || reg2 > 7) {
+		byte w = size == SIZE_64BIT ? 1 : 0;
+		byte b = (reg2 & 8) >> 3;
+		EmitRexPrefix(buffer, w, reg1, 0, b);
+	}
+
+	Emit(buffer, 0x0F);
+	Emit(buffer, op);
+	EmitModRegRM(buffer, 3, reg1, reg2);
+}
+
 void EmitRoundss(BigBuffer* buffer, XMM dst, XMM src, Immediate imm) {
 	byte reg1 = dst & 0x0F;
 	byte reg2 = src & 0x0F;
@@ -1043,7 +1061,7 @@ enum OpCode : int32 {
 	Op_Xorps    = 0x607,
 	Op_Addss    = 0x608,
 	Op_Mulss    = 0x609,
-	Op_Cvtps2pd = 0x60A,
+	Op_Cvtss2sd = 0x60A,
 	Op_Cvtdq2ps = 0x60B,
 	Op_Subss    = 0x60C,
 	Op_Minss    = 0x60D,
@@ -1497,15 +1515,16 @@ bool Emit(BigBuffer* buffer, OpCode opCode, XMM dst, XMM src) {
 	case Op_Movsd: {
 		Emit(buffer, 0xF2, 0x10, dst, src);
 	} break;
-	case Op_Sqrtss :
-	case Op_Rsqrtss:
-	case Op_Rcpss  :
-	case Op_Addss  :
-	case Op_Mulss  :
-	case Op_Subss  :
-	case Op_Minss  :
-	case Op_Divss  :
-	case Op_Maxss  : {
+	case Op_Sqrtss  :
+	case Op_Rsqrtss :
+	case Op_Rcpss   :
+	case Op_Addss   :
+	case Op_Mulss   :
+	case Op_Subss   :
+	case Op_Minss   :
+	case Op_Divss   :
+	case Op_Maxss   : 
+	case Op_Cvtss2sd:{
 		byte op = (byte)(opCode & 15);
 		Emit(buffer, 0xF3, 0x50 | op, dst, src);
 	} break;
@@ -1513,7 +1532,6 @@ bool Emit(BigBuffer* buffer, OpCode opCode, XMM dst, XMM src) {
 	case Op_Andnps  :
 	case Op_Orps    :
 	case Op_Xorps   :
-	case Op_Cvtps2pd:
 	case Op_Cvtdq2ps: {
 		byte op = (byte)(opCode & 15);
 		Emit(buffer, 0x50 | op, dst, src);
@@ -1554,13 +1572,15 @@ bool Emit(BigBuffer* buffer, OpCode opCode, Register dst, XMM src) {
 		if (size != SIZE_32BIT)
 			return false;
 
-		Emit(buffer, 0x66, 0x7E, dst, src);
+		// reverse order
+		Emit_(buffer, 0x66, 0x7E, dst, src);
 	} break;
 	case Op_Movq: {
 		if (size != SIZE_64BIT)
 			return false;
 		
-		Emit(buffer, 0x66, 0x7E, dst, src);
+		// reverse order
+		Emit_(buffer, 0x66, 0x7E, dst, src);
 	} break;
 	default: {
 		return false;
